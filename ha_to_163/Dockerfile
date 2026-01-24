@@ -1,32 +1,22 @@
-FROM alpine:3.18
+# 基础镜像（适配HA add-on）
+FROM python:3.11-slim
 
-# 安装Python、构建依赖及SSL证书（新增ca-certificates）
-RUN apk add --no-cache \
-    python3 \
-    py3-pip \
-    gcc \
-    python3-dev \
-    musl-dev \
-    ca-certificates && \  # 支持SSL证书验证
-    rm -rf /var/cache/apk/*
-
+# 设置工作目录
 WORKDIR /app
 
-# 复制依赖文件并按固定版本安装
+# 安装依赖
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir \
-    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-    --extra-index-url https://pypi.org/simple \
-    -r requirements.txt  # 直接使用requirements.txt确保版本一致
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 验证版本是否匹配（精确检查）
-RUN grep -E "paho-mqtt==|requests==|ntplib==" requirements.txt | while read -r line; do \
-    if ! pip3 list | grep -q "$line"; then \
-        echo "依赖版本不匹配: $line"; \
-        exit 1; \
-    fi; \
-done
+# 复制插件启动脚本
+COPY run.sh /
+RUN chmod +x /run.sh
 
-COPY . .
+# 复制核心代码
+COPY root/ /
 
-CMD ["python3", "/app/main.py"]
+# 设置权限
+RUN chmod -R 755 /etc/services.d/163-gateway/run
+
+# 启动命令
+CMD ["/run.sh"]
