@@ -5,6 +5,7 @@ import json
 import os
 from device_discovery.ha_discovery import HADiscovery
 from iot_push.iot_client import NeteaseIoTClient
+from ntp_sync import sync_time_with_netease_ntp  # 新增NTP导入
 
 # 配置日志（适配HA Add-on）
 logging.basicConfig(
@@ -44,17 +45,33 @@ def load_config_from_env():
             "port": int(os.getenv("MQTT_PORT", 1883)),
             "username": os.getenv("MQTT_USERNAME", ""),
             "password": os.getenv("MQTT_PASSWORD", ""),
-            "keepalive": 60
+            "keepalive": 60  # 长连接：keepalive设为60秒
         },
-        "report_interval": int(os.getenv("REPORT_INTERVAL", 30))
+        "report_interval": 60  # 强制改为60秒推送一次
     }
 
 def main():
-    # 1. 加载配置
+    # 1. 第一步：NTP校时（必须在MQTT连接前执行）
+    logger.info("=== 开始网易NTP服务器校时 ===")
+    ntp_retry = 3  # NTP校时重试3次
+    ntp_success = False
+    for attempt in range(ntp_retry):
+        if sync_time_with_netease_ntp():
+            ntp_success = True
+            break
+        logger.warning(f"NTP校时第{attempt+1}次失败，5秒后重试")
+        time.sleep(5)
+    
+    if not ntp_success:
+        logger.error("NTP校时失败，程序退出（网易IoT平台要求必须校时）")
+        return
+    logger.info("=== NTP校时完成 ===")
+
+    # 2. 加载配置
     config = load_config_from_env()
     logger.info("配置加载完成，开始初始化...")
     
-    # 2. 初始化HA发现模块
+    # 3. 初始化HA发现模块
     ha_discovery = HADiscovery(config, config["ha_headers"])
     
     # 等待HA API就绪（Add-on启动时HA可能未完全加载）
@@ -73,7 +90,7 @@ def main():
         logger.error("未匹配到任何米家插座设备，程序退出")
         return
     
-    # 3. 初始化网易IoT客户端
+    # 4. 初始化网易IoT客户端（长连接配置）
     iot_clients = {}
     for device_id, device_data in matched_devices.items():
         client = NeteaseIoTClient(device_id, config["mqtt_config"])
@@ -83,14 +100,22 @@ def main():
             "client": client,
             "device_data": device_data
         }
-        logger.info(f"IoT客户端初始化成功: {device_id}")
+        logger.info(f"IoT客户端初始化成功: {device_id}（长连接已启用）")
     
-    # 4. 循环上报数据
+    # 5. 循环上报数据（60秒一次）
     report_interval = config["report_interval"]
     logger.info(f"开始循环上报，间隔{report_interval}秒...")
     
     try:
         while True:
+            # 检查MQTT连接状态（长连接保活）
+            for device_id, client_data in iot_clients.items():
+                client = client_data["client"]
+                if not client.connected:
+                    logger.warning(f"设备{device_id}MQTT连接断开，尝试重连")
+                    client.reconnect()
+            
+            # 读取并推送数据
             for device_id, client_data in iot_clients.items():
                 client = client_data["client"]
                 device_data = client_data["device_data"]
@@ -105,11 +130,14 @@ def main():
                         logger.debug(f"读取实体: {entity_id} = {value}")
                 
                 # 推送数据
-                if ha_data:
+                if ha_data and client.connected:
                     client.push_property(ha_data)
+                elif not client.connected:
+                    logger.warning(f"设备{device_id}未连接，跳过本次推送")
                 else:
                     logger.warning(f"设备{device_id}无有效数据")
             
+            # 60秒间隔（固定）
             time.sleep(report_interval)
     
     except KeyboardInterrupt:
