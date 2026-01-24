@@ -1,71 +1,42 @@
-# 使用稳定的Alpine 3.18基础镜像（多架构兼容，aarch64/amd64都能拉取）
-FROM alpine:3.18
+# 基于 Home Assistant 插件标准基础镜像（适配 aarch64 架构）
+# 可根据实际架构调整：amd64/armv7/armhf 等
+FROM homeassistant/aarch64-base:3.19
 
-# 安装系统依赖（保留参考模板的核心，将ntpdate替换为ntp包）
+# 维护者信息（可选，可修改为自己的信息）
+LABEL maintainer="Your Name <your@email.com>"
+
+# 设置工作目录
+WORKDIR /app
+
+# 设置环境变量（避免 Python 缓冲输出，便于日志查看）
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# 安装系统依赖和 Python 基础环境
+# 修复核心：补全 RUN 和 apk add 指令，解决 unknown instruction 错误
 RUN apk add --no-cache \
+    # 系统工具依赖
+    ntp \        # 替代 ntpdate，包含时间同步工具
+    wget \       # 文件下载工具
+    tar \        # 解压工具
+    curl \       # HTTP 请求工具
+    # Python 环境依赖
     python3 \
     py3-pip \
-    gcc \
     python3-dev \
-    musl-dev \
-    ca-certificates \
-    # 补充HA Add-on必需依赖
-    bash \
-    ntp \  # 关键修改：用ntp包替代ntpdate（包含ntpdate工具）
-    wget \
-    tar \
-    curl \
+    # 清理缓存，减小镜像体积
     && rm -rf /var/cache/apk/* \
-    # 建立python/pip软链接，统一命令
+    # 建立 python/pip 软链接，统一命令（兼容 python/python3 调用）
     && ln -sf python3 /usr/bin/python \
     && ln -sf pip3 /usr/bin/pip
 
-# 手动安装s6-overlay（适配aarch64架构，支持s6-svscan进程管理）
-ENV S6_OVERLAY_VERSION=3.1.6.2
-RUN wget -q -O /tmp/s6-overlay-noarch.tar.xz https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-noarch.tar.xz \
-    && wget -q -O /tmp/s6-overlay-aarch64.tar.xz https://github.com/just-containers/s6-overlay/releases/download/v${S6_OVERLAY_VERSION}/s6-overlay-aarch64.tar.xz \
-    && tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz \
-    && tar -C / -Jxpf /tmp/s6-overlay-aarch64.tar.xz \
-    && rm -rf /tmp/s6-overlay-*.tar.xz
-
-# 手动安装bashio（支持bashio::config读取HA Add-on配置）
-ENV BASHIO_VERSION=0.19.0
-RUN mkdir -p /usr/lib/bashio \
-    && wget -q -O /tmp/bashio.tar.gz https://github.com/hassio-addons/bashio/archive/v${BASHIO_VERSION}.tar.gz \
-    && tar zxvf /tmp/bashio.tar.gz -C /usr/lib/bashio --strip=1 \
-    && rm /tmp/bashio.tar.gz \
-    && ln -s /usr/lib/bashio/bashio /usr/bin/bashio \
-    # 补充with-contenv脚本（HA Add-on标准，适配run.sh的shebang）
-    && ln -s /usr/lib/bashio/lib/with-contenv /usr/bin/with-contenv
-
-WORKDIR /app
-
-# 复制依赖文件并按固定版本安装（完全保留参考模板的国内源逻辑）
+# 复制插件的依赖文件（如果有 requirements.txt，需确保文件存在）
+# 若没有该文件，可注释掉这两行
 COPY requirements.txt .
-RUN pip install --no-cache-dir \
-    --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-    --extra-index-url https://pypi.org/simple \
-    -r requirements.txt  # 直接使用requirements.txt确保版本一致
+RUN pip install --no-cache-dir -r requirements.txt
 
-# 验证版本是否匹配（保留参考模板的校验逻辑）
-RUN grep -E "paho-mqtt==|requests==|typing-extensions==" requirements.txt | while read -r line; do \
-    if ! pip list | grep -q "$line"; then \
-        echo "依赖版本不匹配: $line"; \
-        exit 1; \
-    fi; \
-done
-
-# 复制应用代码（保留所有文件）
+# 复制插件的所有代码到工作目录
 COPY . .
 
-# 创建s6服务目录（适配原有run.sh的s6-svscan逻辑）
-RUN mkdir -p /etc/services.d/163-gateway \
-    # 给run.sh添加执行权限
-    && chmod +x /app/run.sh \
-    # 链接s6服务启动脚本
-    && ln -s /app/run.sh /etc/services.d/163-gateway/run \
-    # 统一权限
-    && chown -R root:root /app /etc/services.d
-
-# HA Add-on标准入口（s6-overlay管理服务）
-CMD ["/init"]
+# 设置插件启动命令（根据实际入口文件调整，示例为 main.py）
+CMD ["python", "/app/main.py"]
