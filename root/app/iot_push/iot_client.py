@@ -1,4 +1,4 @@
-"""网易IoT MQTT客户端（适配HA Add-on）"""
+"""网易IoT MQTT客户端（适配HA Add-on + 长连接）"""
 import json
 import logging
 import time
@@ -10,21 +10,33 @@ from iot_model.config import (
 import requests
 
 class NeteaseIoTClient:
-    """IoT客户端"""
+    """IoT客户端（长连接版）"""
     def __init__(self, device_name: str, mqtt_config: Dict):
         self.device_name = device_name
         self.mqtt_host = mqtt_config.get("host")
         self.mqtt_port = mqtt_config.get("port")
         self.mqtt_username = mqtt_config.get("username")
         self.mqtt_password = mqtt_config.get("password")
-        self.keepalive = mqtt_config.get("keepalive", 60)
+        self.keepalive = mqtt_config.get("keepalive", 60)  # 长连接心跳间隔
         
-        # MQTT客户端
-        self.client = mqtt.Client(client_id=f"{PRODUCT_KEY}_{device_name}")
+        # MQTT客户端配置（长连接优化）
+        self.client = mqtt.Client(
+            client_id=f"{PRODUCT_KEY}_{device_name}",
+            clean_session=False,  # 禁用clean session，保持长连接
+            protocol=mqtt.MQTTv311
+        )
         self.client.username_pw_set(self.mqtt_username, self.mqtt_password)
         self.client.on_connect = self._on_connect
         self.client.on_message = self._on_message
         self.client.on_disconnect = self._on_disconnect
+        self.client.on_publish = self._on_publish  # 新增发布回调
+        self.client.on_subscribe = self._on_subscribe  # 新增订阅回调
+        
+        # 长连接状态监控
+        self.connected = False
+        self.last_heartbeat = 0
+        self.reconnect_count = 0
+        self.max_reconnect = 10  # 最大重连次数
         
         # 日志
         self.logger = logging.getLogger(f"iot_client_{device_name}")
@@ -34,8 +46,7 @@ class NeteaseIoTClient:
         self.topic_control_reply = TOPIC_CONFIG["control_reply"].replace("$(deviceName)", device_name)
         self.topic_property_post = TOPIC_CONFIG["property_post"].replace("$(deviceName)", device_name)
         
-        # 状态
-        self.connected = False
+        # HA配置
         self.ha_config = {}
 
     def set_ha_config(self, ha_config: Dict):
@@ -43,14 +54,24 @@ class NeteaseIoTClient:
         self.ha_config = ha_config
 
     def _on_connect(self, client, userdata, flags, rc):
-        """连接回调"""
+        """连接回调（长连接优化）"""
         if rc == 0:
             self.connected = True
-            self.logger.info(f"IoT连接成功: {self.device_name}")
+            self.last_heartbeat = time.time()
+            self.reconnect_count = 0
+            self.logger.info(f"IoT长连接成功: {self.device_name} (MQTT keepalive: {self.keepalive}秒)")
+            
+            # 重新订阅命令Topic（确保长连接订阅不丢失）
             self.client.subscribe(self.topic_control, qos=1)
+            self.logger.info(f"重新订阅命令Topic: {self.topic_control}")
         else:
             self.connected = False
-            self.logger.error(f"IoT连接失败，错误码{rc}")
+            self.reconnect_count += 1
+            self.logger.error(f"IoT连接失败，错误码{rc}，已重连{self.reconnect_count}/{self.max_reconnect}次")
+            
+            # 超过最大重连次数则停止
+            if self.reconnect_count >= self.max_reconnect:
+                self.logger.critical(f"达到最大重连次数({self.max_reconnect})，停止重连")
 
     def _on_message(self, client, userdata, msg):
         """消息回调（处理平台命令）"""
@@ -103,17 +124,41 @@ class NeteaseIoTClient:
             self._publish(error_reply, self.topic_control_reply)
 
     def _on_disconnect(self, client, userdata, rc):
-        """断开回调"""
+        """断开回调（长连接重连逻辑）"""
         self.connected = False
-        self.logger.warning(f"IoT断开连接，错误码{rc}")
-        self.reconnect()
+        self.logger.warning(f"IoT长连接断开，错误码{rc}")
+        
+        # 非主动断开则重连
+        if rc != 0 and self.reconnect_count < self.max_reconnect:
+            self.logger.info(f"{5}秒后尝试重连...")
+            time.sleep(5)
+            self.reconnect()
+
+    def _on_publish(self, client, userdata, mid):
+        """发布回调（更新心跳时间）"""
+        self.last_heartbeat = time.time()
+        self.logger.debug(f"消息发布成功，Mid: {mid}，更新心跳时间")
+
+    def _on_subscribe(self, client, userdata, mid, granted_qos):
+        """订阅回调"""
+        self.logger.debug(f"Topic订阅成功，Mid: {mid}，QoS: {granted_qos}")
 
     def _publish(self, data: Dict, topic: str):
-        """发布消息"""
+        """发布消息（长连接安全发布）"""
+        if not self.connected:
+            self.logger.warning("未连接到IoT平台，跳过消息发布")
+            return
+        
         try:
             payload = json.dumps(data, ensure_ascii=False)
-            self.client.publish(topic, payload, qos=1)
-            self.logger.debug(f"推送消息: {topic} → {payload}")
+            # 阻塞发布（确保消息发送成功）
+            result = self.client.publish(topic, payload, qos=1, retain=False)
+            result.wait_for_publish()
+            
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                self.logger.error(f"消息发布失败，错误码: {result.rc}")
+            else:
+                self.logger.debug(f"推送消息: {topic} → {payload}")
         except Exception as e:
             self.logger.error(f"推送失败: {str(e)}")
 
@@ -191,33 +236,49 @@ class NeteaseIoTClient:
             return config["default"]
 
     def connect(self):
-        """连接MQTT"""
+        """连接MQTT（长连接版）"""
         try:
+            # 启用自动重连
+            self.client.auto_reconnect = True
             self.client.connect(self.mqtt_host, self.mqtt_port, self.keepalive)
+            # 启动后台循环（保持长连接）
             self.client.loop_start()
-            # 等待连接
-            for _ in range(5):
+            
+            # 等待连接成功
+            for _ in range(10):  # 延长等待时间到10秒
                 if self.connected:
                     break
                 time.sleep(1)
+            
             if not self.connected:
-                self.logger.error("MQTT连接超时")
+                self.logger.error("MQTT长连接超时")
         except Exception as e:
-            self.logger.error(f"MQTT连接失败: {str(e)}")
+            self.logger.error(f"MQTT长连接失败: {str(e)}")
+            self.reconnect()
 
     def reconnect(self):
-        """重连"""
-        time.sleep(5)
-        self.connect()
+        """重连（长连接优化）"""
+        if self.reconnect_count >= self.max_reconnect:
+            self.logger.error("达到最大重连次数，停止重连")
+            return
+        
+        self.logger.info(f"尝试第{self.reconnect_count+1}次重连...")
+        try:
+            self.client.reconnect()
+        except Exception as e:
+            self.logger.error(f"重连失败: {str(e)}")
+            time.sleep(5)
+            self.reconnect()
 
     def disconnect(self):
-        """断开连接"""
+        """断开连接（优雅关闭长连接）"""
         self.client.loop_stop()
         self.client.disconnect()
         self.connected = False
+        self.logger.info("IoT长连接已优雅关闭")
 
     def push_property(self, ha_data: Dict):
-        """推送属性数据"""
+        """推送属性数据（60秒一次）"""
         if not self.connected:
             self.logger.warning("MQTT未连接，尝试重连")
             self.reconnect()
@@ -226,7 +287,7 @@ class NeteaseIoTClient:
         
         # 构建上报数据
         payload = {
-            "id": str(int(time.time()*1000)),
+            "id": str(int(time.time()*1000)),  # 使用NTP校时后的时间戳
             "params": {}
         }
         
@@ -237,6 +298,6 @@ class NeteaseIoTClient:
                 continue
             payload["params"][FIELD_MAPPING[ha_field]["iot_field"]] = val
         
-        # 推送
+        # 推送（长连接安全发布）
         self._publish(payload, self.topic_property_post)
-        self.logger.info(f"属性上报成功: {payload}")
+        self.logger.info(f"属性上报成功（60秒间隔）: {payload}")
