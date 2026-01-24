@@ -1,13 +1,17 @@
-# 新版镜像 + chrony（兼容 Alpine 3.18+）
 FROM homeassistant/aarch64-base:latest
-WORKDIR /app
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
 
 RUN apk add --no-cache chrony wget tar curl python3 py3-pip python3-dev && \
     rm -rf /var/cache/apk/* && \
     ln -sf python3 /usr/bin/python && \
     ln -sf pip3 /usr/bin/pip
 
+RUN mkdir -p /etc/services.d/163-gateway
+
+COPY run /etc/services.d/163-gateway/run
+
+RUN chmod +x /etc/services.d/163-gateway/run
+
+WORKDIR /app
 COPY . .
-CMD ["python", "/app/main.py"]
+
+RUN if [ -f "requirements.txt" ]; then pip install --no-cache-dir -r requirements.txt; fi
