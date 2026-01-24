@@ -1,0 +1,45 @@
+{
+  "name": "163 IoT Gateway Add-on",
+  "url": "https://github.com/Dmxmj/ha-163-plug",
+  "maintainer": "Dmxmj <your-email@example.com>",
+  "addons": [
+    {
+      "name": "163 Gateway (米家插座版)",
+      "slug": "163-gateway",
+      "description": "Home Assistant 对接网易IoT平台，支持米家多功能智能插座",
+      "version": "1.0.0",
+      "arch": ["amd64", "armv7", "aarch64"],
+      "url": "https://github.com/Dmxmj/ha-163-plug/tree/main/163-gateway",
+      "startup": "services",
+      "boot": "auto",
+      "ports": {},
+      "ports_description": {},
+      "map": [],
+      "options": {
+        "ha_url": "http://supervisor/core/api",
+        "ha_token": "",
+        "ha_entity_prefix": "iot_cn_2004109533_pw6u1",
+        "mqtt_host": "device.iot.163.com",
+        "mqtt_port": 1883,
+        "mqtt_username": "",
+        "mqtt_password": "",
+        "report_interval": 30,
+        "retry_attempts": 5,
+        "retry_delay": 3
+      },
+      "schema": {
+        "ha_url": "str",
+        "ha_token": "str",
+        "ha_entity_prefix": "str",
+        "mqtt_host": "str",
+        "mqtt_port": "int",
+        "mqtt_username": "str",
+        "mqtt_password": "str",
+        "report_interval": "int",
+        "retry_attempts": "int",
+        "retry_delay": "int"
+      },
+      "image": "ghcr.io/dmxmj/ha-163-gateway:{arch}-{version}"
+    }
+  ]
+}
