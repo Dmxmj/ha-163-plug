@@ -1,12 +1,19 @@
-#!/bin/sh
-set -e
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# 163 Gateway 插件启动脚本
+# ==============================================================================
 
-# 再次确认依赖
-echo "验证依赖是否安装..."
-if ! python3 -c "import requests"; then
-    echo "紧急安装 requests..."
-    pip3 install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple requests==2.31.0
-fi
+# 读取HA add-on配置并写入环境变量
+export HA_URL=$(bashio::config 'ha_url')
+export HA_TOKEN=$(bashio::config 'ha_token')
+export HA_ENTITY_PREFIX=$(bashio::config 'ha_entity_prefix')
+export MQTT_HOST=$(bashio::config 'mqtt_host')
+export MQTT_PORT=$(bashio::config 'mqtt_port')
+export MQTT_USERNAME=$(bashio::config 'mqtt_username')
+export MQTT_PASSWORD=$(bashio::config 'mqtt_password')
+export REPORT_INTERVAL=$(bashio::config 'report_interval')
+export RETRY_ATTEMPTS=$(bashio::config 'retry_attempts')
+export RETRY_DELAY=$(bashio::config 'retry_delay')
 
-echo "===== HA to 163 Gateway 启动 ====="
-python3 /app/main.py
+# 启动服务（由supervisor管理）
+exec /usr/bin/s6-svscan /etc/services.d/
