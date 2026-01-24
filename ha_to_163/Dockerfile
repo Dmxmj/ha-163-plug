@@ -1,7 +1,7 @@
 # 使用稳定的Alpine 3.18基础镜像（多架构兼容，aarch64/amd64都能拉取）
 FROM alpine:3.18
 
-# 安装系统依赖（保留参考模板的核心，补充bash/s6/ntpdate等HA Add-on必需依赖）
+# 安装系统依赖（保留参考模板的核心，将ntpdate替换为ntp包）
 RUN apk add --no-cache \
     python3 \
     py3-pip \
@@ -11,7 +11,7 @@ RUN apk add --no-cache \
     ca-certificates \
     # 补充HA Add-on必需依赖
     bash \
-    ntpdate \
+    ntp \  # 关键修改：用ntp包替代ntpdate（包含ntpdate工具）
     wget \
     tar \
     curl \
