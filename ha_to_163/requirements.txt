@@ -1,4 +1,5 @@
-# 仅保留实际需要的Python包（移除bashio/typing）
-requests>=2.31.0
-paho-mqtt>=1.6.1
-typing-extensions>=4.8.0  # 替代旧的typing（Python3.11兼容）
+# 固定版本号，适配国内源安装+版本校验
+requests==2.32.3
+paho-mqtt==2.1.0
+typing-extensions==4.12.2
+# 移除bashio/typing（非PyPI包）
