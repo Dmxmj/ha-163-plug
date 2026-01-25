@@ -24,8 +24,9 @@ bashio::log.info "同步网易NTP服务器时间..."
 ntpdate ntp.n.netease.com || bashio::log.warning "NTP校时失败，继续启动服务"
 
 # 启动服务（由supervisor管理，保留你的原有逻辑）
-bashio::log.info "启动s6服务管理进程..."
-exec /usr/bin/s6-svscan /etc/services.d/
+#!/usr/bin/with-contenv sh
+cd /app
+exec python /app/main.py
 
 # 异常捕获
 bashio::log.error "服务启动失败，进程异常退出"
