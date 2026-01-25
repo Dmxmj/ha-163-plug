@@ -23,10 +23,12 @@ export RETRY_DELAY=$(bashio::config 'retry_delay')
 bashio::log.info "同步网易NTP服务器时间..."
 ntpdate ntp.n.netease.com || bashio::log.warning "NTP校时失败，继续启动服务"
 
-# 启动服务（由supervisor管理，保留你的原有逻辑）
 #!/usr/bin/with-contenv sh
+# 适配 ha-163-plug 的 s6 启动脚本（解决pid 1问题）
 cd /app
-exec python /app/main.py
+
+# 关键：执行仓库的核心脚本 ha_to_163.py（不是main.py）
+exec python /app/ha_to_163.py
 
 # 异常捕获
 bashio::log.error "服务启动失败，进程异常退出"
