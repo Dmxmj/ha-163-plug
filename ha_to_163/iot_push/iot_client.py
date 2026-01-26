@@ -462,9 +462,14 @@ class NeteaseIoTClient:
         ha_headers = self.ha_config.get("ha_headers")
         if not ha_url or not ha_headers:
             self.logger.error("HA配置不完整，无法动态查询实体")
+            self.logger.error(f"ha_url: {ha_url}, ha_headers: {ha_headers}")
             return None
         
         try:
+            # 添加调试信息
+            self.logger.debug(f"查询HA API: {ha_url}/api/states")
+            self.logger.debug(f"请求头: {ha_headers}")
+            
             # 查询HA中的所有实体
             resp = requests.get(
                 f"{ha_url}/api/states",
@@ -474,6 +479,7 @@ class NeteaseIoTClient:
             )
             if resp.status_code != 200:
                 self.logger.error(f"查询HA实体失败，状态码: {resp.status_code}")
+                self.logger.error(f"响应内容: {resp.text}")
                 return None
 
             entities = resp.json()
