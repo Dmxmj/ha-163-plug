@@ -613,28 +613,10 @@ class NeteaseIoTClient:
         self.logger.info(f"属性推送成功: {payload}")
 
     def _convert_ha_data(self, ha_data: Dict) -> Dict:
-        """转换HA数据为IoT格式（按照物模型规范）"""
-        # 根据物模型定义的属性映射
-        data_map = {
-            "all_switch": "state0",           # 全开 (0-1)
-            "jack_1": "state1",               # 插孔1 (0-1) 
-            "jack_2": "state2",               # 插孔2 (0-1)
-            "jack_3": "state3",               # 插孔3 (0-1)
-            "jack_4": "state4",               # 插孔4 (0-1)
-            "jack_5": "state5",               # 插孔5 (0-1)
-            "jack_6": "state6",               # 插孔6 (0-1)
-            "default_power_on_state": "default", # 默认状态功能 (0-2)
-            "voltage": "voltage",             # 电压 (0-400, float, V)
-            "electric_current": "current",    # 电流 (0-9999, float, A)
-            "electric_power": "active_power", # 功率 (0-9999999, float, W)
-            "power_consumption": "energy"     # 用电量 (0-9999999, float, kwh)
-            # frequency 频率属性暂时没有对应的HA实体，如果有可以添加
-        }
-        
+        """转换HA数据为IoT格式（直接使用IoT原生参数名，避免双重转换）"""
         converted = {}
-        for ha_key, value in ha_data.items():
-            iot_key = data_map.get(ha_key)
-            if iot_key and value is not None:
+        for iot_key, value in ha_data.items():
+            if value is not None:
                 # 值类型转换
                 if iot_key in ["state0", "state1", "state2", "state3", "state4", "state5", "state6"]:
                     # 开关类型：确保为整数 0 或 1
@@ -642,13 +624,16 @@ class NeteaseIoTClient:
                 elif iot_key == "default":
                     # 默认状态：0关闭,1开启,2记忆
                     converted[iot_key] = int(value) if isinstance(value, (int, float)) else 0
-                else:
+                elif iot_key in ["active_power", "current", "voltage", "energy"]:
                     # 传感器数值：确保为浮点数
                     try:
                         converted[iot_key] = float(value)
                     except (ValueError, TypeError):
-                        self.logger.warning(f"无法转换{ha_key}的值{value}为浮点数")
+                        self.logger.warning(f"无法转换{iot_key}的值{value}为浮点数")
                         continue
+                else:
+                    # 其他属性直接保留
+                    converted[iot_key] = value
         
         self.logger.debug(f"数据转换: {ha_data} -> {converted}")
         return converted
