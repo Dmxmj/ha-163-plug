@@ -439,70 +439,76 @@ class NeteaseIoTClient:
         return self._map_param_to_entity_with_prefix(param, self.entity_prefix)
 
     def _map_param_to_entity_with_prefix(self, param: str, entity_prefix: str) -> Optional[str]:
-        """映射IoT参数到HA实体ID（优先使用发现的映射，降级到硬编码）"""
-        # 首先尝试从设备发现结果中获取真实的实体映射
-        if hasattr(self, 'discovery') and self.discovery:
-            # 查找设备ID对应的实体映射
-            device_id = None
-            if hasattr(self, 'subdevice_configs') and self.subdevice_configs:
-                for device_config in self.subdevice_configs:
-                    if device_config.get("entity_prefix") == entity_prefix:
-                        device_id = device_config.get("device_id")
-                        break
-            
-            if device_id:
-                discovered_devices = self.discovery.get_discovered_devices()
-                device_info = discovered_devices.get(device_id)
-                
-                if device_info:
-                    # 处理数据结构（和推送时保持一致）
-                    if isinstance(device_info, dict):
-                        if 'sensors' in device_info:
-                            sensors = device_info['sensors']
-                        else:
-                            sensors = device_info
-                        
-                        # IoT参数到属性名的映射
-                        iot_param_to_property = {
-                            "state0": "all_switch",      # 总开关
-                            "state1": "jack_1",          # 插口1
-                            "state2": "jack_2",          # 插口2
-                            "state3": "jack_3",          # 插口3
-                            "state4": "jack_4",          # 插口4
-                            "state5": "jack_5",          # 插口5
-                            "state6": "jack_6",          # 插口6
-                            "default": "default_power_on_state"  # 默认上电状态
-                        }
-                        
-                        property_name = iot_param_to_property.get(param)
-                        if property_name and property_name in sensors:
-                            real_entity_id = sensors[property_name]
-                            self.logger.info(f"✅ 使用发现的实体映射: {param} → {property_name} → {real_entity_id}")
-                            return real_entity_id
-                        else:
-                            self.logger.warning(f"⚠️ 参数{param}在发现的实体中未找到对应的{property_name}")
-                else:
-                    self.logger.warning(f"⚠️ 设备{device_id}未在发现结果中找到")
-            else:
-                self.logger.warning(f"⚠️ 无法通过entity_prefix {entity_prefix}找到对应的设备ID")
-        else:
-            self.logger.warning("⚠️ 设备发现模块不可用，使用硬编码映射")
-        
-        # 降级到硬编码映射（兜底）
-        param_map = {
-            "state0": f"switch.{entity_prefix}_on_p_2_1",
-            "state1": f"switch.{entity_prefix}_on_p_7_1",
-            "state2": f"switch.{entity_prefix}_on_p_8_1",
-            "state3": f"switch.{entity_prefix}_on_p_9_1",
-            "state4": f"switch.{entity_prefix}_on_p_10_1",
-            "state5": f"switch.{entity_prefix}_on_p_11_1",
-            "state6": f"switch.{entity_prefix}_on_p_12_1",
-            "default": f"select.{entity_prefix}_default_power_on_state_p_2_2"
+        """映射IoT参数到HA实体ID（动态查询HA实体，参考工作代码的逻辑）"""
+        # 参数到实体类型的映射
+        param_to_domain = {
+            "state0": "switch",    # 开关类型
+            "state1": "switch", 
+            "state2": "switch",
+            "state3": "switch", 
+            "state4": "switch",
+            "state5": "switch",
+            "state6": "switch",
+            "default": "select"    # 选择器类型
         }
-        fallback_entity = param_map.get(param)
-        if fallback_entity:
-            self.logger.info(f"🔄 使用硬编码映射: {param} → {fallback_entity}")
-        return fallback_entity
+        
+        target_domain = param_to_domain.get(param)
+        if not target_domain:
+            self.logger.warning(f"参数{param}不支持控制")
+            return None
+        
+        # 动态查询HA实体（参考工作代码的实现）
+        ha_url = self.ha_config.get("ha_url")
+        ha_headers = self.ha_config.get("ha_headers")
+        if not ha_url or not ha_headers:
+            self.logger.error("HA配置不完整，无法动态查询实体")
+            return None
+        
+        try:
+            # 查询HA中的所有实体
+            resp = requests.get(
+                f"{ha_url}/api/states",
+                headers=ha_headers,
+                timeout=10,
+                verify=False
+            )
+            if resp.status_code != 200:
+                self.logger.error(f"查询HA实体失败，状态码: {resp.status_code}")
+                return None
+
+            entities = resp.json()
+            # 筛选符合前缀且类型匹配的实体（参考工作代码逻辑）
+            candidate_entities = [
+                e["entity_id"] for e in entities
+                if entity_prefix in e["entity_id"] 
+                and e["entity_id"].startswith(f"{target_domain}.")
+            ]
+
+            if candidate_entities:
+                matched_entity = candidate_entities[0]  # 取第一个匹配的
+                self.logger.info(f"✅ 动态匹配到控制实体: {param} → {matched_entity}")
+                return matched_entity
+            else:
+                self.logger.error(f"未找到前缀为'{entity_prefix}'的{target_domain}类型实体")
+                # 降级到硬编码映射作为兜底
+                fallback_map = {
+                    "state0": f"switch.{entity_prefix}_on_p_2_1",
+                    "state1": f"switch.{entity_prefix}_on_p_7_1",
+                    "state2": f"switch.{entity_prefix}_on_p_8_1",
+                    "state3": f"switch.{entity_prefix}_on_p_9_1",
+                    "state4": f"switch.{entity_prefix}_on_p_10_1",
+                    "state5": f"switch.{entity_prefix}_on_p_11_1",
+                    "state6": f"switch.{entity_prefix}_on_p_12_1",
+                    "default": f"select.{entity_prefix}_default_power_on_state_p_2_2"
+                }
+                fallback_entity = fallback_map.get(param)
+                if fallback_entity:
+                    self.logger.info(f"🔄 使用硬编码兜底映射: {param} → {fallback_entity}")
+                return fallback_entity
+
+        except Exception as e:
+            self.logger.error(f"动态查询实体异常: {e}")
+            return None
 
     def _init_mqtt_client(self):
         """初始化MQTT客户端，设置认证信息和回调函数"""
