@@ -33,7 +33,13 @@ class GatewayManager:
         self.running = False
         self.push_thread = None
         self.discovery_thread = None
+        self.dynamic_discovery_thread = None  # 动态发现线程
         self.lock = threading.Lock()  # 线程安全锁
+        
+        # 动态设备发现状态
+        self.last_config_check = 0
+        self.last_config_hash = None
+        self.active_device_configs = {}  # 当前活跃的设备配置缓存
         
         # 注册信号处理（优雅退出）
         signal.signal(signal.SIGTERM, self._graceful_exit)
@@ -62,7 +68,13 @@ class GatewayManager:
         # 4. 初始化所有启用设备的IoT客户端
         self._init_iot_clients()
         
-        # 5. 标记运行状态
+        # 5. 初始设备发现
+        self._initial_device_discovery()
+        
+        # 6. 初始化动态发现状态
+        self._initialize_dynamic_discovery()
+        
+        # 7. 标记运行状态
         self.running = True
         logger.info("=== 网关初始化完成 ===")
         return True
@@ -89,7 +101,15 @@ class GatewayManager:
         )
         self.discovery_thread.start()
         
-        logger.info("=== 网关已启动（推送间隔60秒，发现重试间隔300秒）===")
+        # 启动动态设备发现线程（60秒/次）
+        self.dynamic_discovery_thread = threading.Thread(
+            target=self._dynamic_device_discovery_loop,
+            name="DynamicDiscoveryThread",
+            daemon=True
+        )
+        self.dynamic_discovery_thread.start()
+        
+        logger.info("=== 网关已启动（推送间隔60秒，发现重试间隔300秒，动态发现间隔60秒）===")
         
         # 主线程阻塞（保持程序运行）
         try:
@@ -163,6 +183,32 @@ class GatewayManager:
             else:
                 logger.error("❌ 网关IoT连接建立失败")
 
+    def _initial_device_discovery(self):
+        """初始设备发现"""
+        logger.info("=== 开始初始设备发现 ===")
+        device_configs = self.config_manager.get_all_enabled_devices()
+        
+        # 为每个设备配置添加支持的属性列表
+        for device_config in device_configs:
+            if "supported_properties" not in device_config:
+                # 默认支持的属性（米家智能插座）
+                device_config["supported_properties"] = [
+                    "all_switch", "jack_1", "jack_2", "jack_3", "jack_4", "jack_5", "jack_6",
+                    "electric_power", "electric_current", "voltage", "power_consumption",
+                    "default_power_on_state"
+                ]
+        
+        discovered_devices = self.discovery.discover_all_devices(device_configs)
+        if discovered_devices:
+            logger.info(f"✅ 初始发现完成，成功发现{len(discovered_devices)}个设备")
+            for device_id, device_info in discovered_devices.items():
+                sensors = device_info.get("sensors", {})
+                logger.info(f"  - 设备{device_id}: {len(sensors)}个传感器")
+                for prop_name, entity_id in sensors.items():
+                    logger.debug(f"    {prop_name} → {entity_id}")
+        else:
+            logger.warning("❌ 初始设备发现未找到任何设备")
+
     def _push_data_loop(self):
         """数据推送循环（核心业务逻辑）"""
         while self.running:
@@ -178,40 +224,51 @@ class GatewayManager:
                 
                 # 2. 获取当前已发现的所有设备
                 discovered_devices = self.discovery.get_discovered_devices()
-                logger.debug(f"推送循环 - 已发现设备数: {len(discovered_devices)}")
+                logger.info(f"推送循环 - 已发现设备数: {len(discovered_devices)}")
                 
                 # 3. 获取启用的子设备配置
                 device_configs = self.config_manager.get_all_enabled_devices()
                 device_config_map = {d["device_id"]: d for d in device_configs}
                 
                 # 4. 逐个子设备处理数据推送
+                if discovered_devices:
+                    logger.info(f"已发现的设备列表: {list(discovered_devices.keys())}")
+                    logger.info(f"配置中的设备列表: {list(device_config_map.keys())}")
+                
                 for device_id, device_info in discovered_devices.items():
                     try:
                         # 检查是否是配置中的子设备
                         if device_id not in device_config_map:
-                            logger.debug(f"设备{device_id}不在子设备配置中，跳过推送")
+                            logger.warning(f"设备{device_id}不在子设备配置中，跳过推送")
+                            logger.info(f"可用配置设备: {list(device_config_map.keys())}")
                             continue
+                        
+                        logger.info(f"开始处理设备: {device_id}")
                         
                         # 读取HA实体值（容错读取，单个实体失败不影响）
                         ha_data = {}
                         sensors = device_info.get("sensors", {})
+                        logger.info(f"设备{device_id}可用传感器: {list(sensors.keys())}")
+                        
                         for prop_name, entity_id in sensors.items():
                             value = self.discovery.read_entity_value_safe(entity_id)
                             if value is not None:
                                 ha_data[prop_name] = value
+                                logger.debug(f"设备{device_id} {prop_name}: {value}")
                         
                         # 推送子设备数据到网易IoT平台
                         if ha_data:
+                            logger.info(f"设备{device_id}待推送数据: {ha_data}")
                             device_config = device_config_map[device_id]
                             success = gateway_client.push_subdevice_property(
                                 device_config, ha_data
                             )
                             if success:
-                                logger.debug(f"子设备{device_id}推送成功，字段数: {len(ha_data)}")
+                                logger.info(f"✅ 子设备{device_id}推送成功，字段数: {len(ha_data)}")
                             else:
-                                logger.warning(f"子设备{device_id}推送失败")
+                                logger.warning(f"❌ 子设备{device_id}推送失败")
                         else:
-                            logger.debug(f"子设备{device_id}无有效数据可推送")
+                            logger.warning(f"设备{device_id}无有效数据可推送")
                     
                     except Exception as e:
                         # 单个设备推送失败，记录日志并继续处理下一个
@@ -283,29 +340,131 @@ class GatewayManager:
             self.push_thread.join(timeout=10)
         if self.discovery_thread and self.discovery_thread.is_alive():
             self.discovery_thread.join(timeout=10)
+        if self.dynamic_discovery_thread and self.dynamic_discovery_thread.is_alive():
+            self.dynamic_discovery_thread.join(timeout=10)
         
         logger.info("=== 网关已优雅退出 ===")
         sys.exit(0)
 
+    def _dynamic_device_discovery_loop(self):
+        """动态设备发现循环（不中断现有推送的情况下发现新设备）"""
+        while self.running:
+            try:
+                time.sleep(60)  # 每60秒检查一次
+                self._check_and_discover_new_devices()
+            except Exception as e:
+                logger.error(f"动态发现循环异常: {str(e)}")
+                time.sleep(30)
+
+    def _check_and_discover_new_devices(self):
+        """检查并发现新增设备（支持热插拔）"""
+        import hashlib
+        import json
+        
+        try:
+            # 1. 重新加载配置（从文件或环境变量）
+            current_config = self.config_manager.load_from_env()
+            if not current_config:
+                logger.warning("动态发现：无法重新加载配置")
+                return
+            
+            # 2. 计算当前设备配置的哈希值
+            current_device_configs = current_config.get("devices_triple", [])
+            current_config_json = json.dumps(current_device_configs, sort_keys=True)
+            current_config_hash = hashlib.md5(current_config_json.encode()).hexdigest()
+            
+            # 3. 检查配置是否有变化
+            if self.last_config_hash and self.last_config_hash == current_config_hash:
+                # 配置无变化，跳过此次检查
+                return
+            
+            logger.info("=== 检测到设备配置变化，开始动态发现 ===")
+            
+            # 4. 识别新增设备
+            current_device_ids = {d["device_id"] for d in current_device_configs if d.get("enabled", False)}
+            active_device_ids = set(self.active_device_configs.keys())
+            
+            new_device_ids = current_device_ids - active_device_ids
+            removed_device_ids = active_device_ids - current_device_ids
+            
+            if new_device_ids:
+                logger.info(f"发现新增设备: {list(new_device_ids)}")
+                
+                # 5. 为新增设备执行实体发现
+                new_device_configs = [d for d in current_device_configs 
+                                    if d["device_id"] in new_device_ids and d.get("enabled", False)]
+                
+                # 为新设备配置添加默认支持的属性
+                for device_config in new_device_configs:
+                    if "supported_properties" not in device_config:
+                        device_config["supported_properties"] = [
+                            "all_switch", "jack_1", "jack_2", "jack_3", "jack_4", "jack_5", "jack_6",
+                            "electric_power", "electric_current", "voltage", "power_consumption",
+                            "default_power_on_state"
+                        ]
+                
+                # 执行新设备的发现（不影响现有设备）
+                newly_discovered = self.discovery.discover_all_devices(new_device_configs)
+                
+                if newly_discovered:
+                    logger.info(f"✅ 动态发现成功，新增{len(newly_discovered)}个设备")
+                    for device_id, device_info in newly_discovered.items():
+                        sensors = device_info.get("sensors", {})
+                        logger.info(f"  - 新设备{device_id}: {len(sensors)}个传感器")
+                        
+                        # 更新活跃设备配置缓存
+                        device_config = next(d for d in new_device_configs if d["device_id"] == device_id)
+                        self.active_device_configs[device_id] = device_config
+                else:
+                    logger.warning(f"❌ 新增设备{list(new_device_ids)}发现失败")
+            
+            if removed_device_ids:
+                logger.info(f"检测到移除设备: {list(removed_device_ids)}")
+                # 从活跃配置中移除
+                for device_id in removed_device_ids:
+                    self.active_device_configs.pop(device_id, None)
+                    # 注意：不需要断开IoT连接，因为使用的是网关模式单一连接
+                
+            # 6. 更新配置哈希值
+            self.last_config_hash = current_config_hash
+            self.last_config_check = int(time.time())
+            
+            logger.info(f"动态发现完成，当前活跃设备数: {len(self.active_device_configs)}")
+                
+        except Exception as e:
+            logger.error(f"动态设备发现异常: {str(e)}", exc_info=True)
+
+    def _initialize_dynamic_discovery(self):
+        """初始化动态发现状态"""
+        import hashlib
+        import json
+        
+        # 获取当前设备配置并建立初始哈希值
+        device_configs = self.config.get("devices_triple", [])
+        config_json = json.dumps(device_configs, sort_keys=True)
+        self.last_config_hash = hashlib.md5(config_json.encode()).hexdigest()
+        
+        # 建立活跃设备配置缓存
+        for device_config in device_configs:
+            if device_config.get("enabled", False):
+                device_id = device_config["device_id"]
+                self.active_device_configs[device_id] = device_config
+        
+        self.last_config_check = int(time.time())
+        logger.info(f"动态发现初始化完成，活跃设备数: {len(self.active_device_configs)}")
+
+    def _get_config_hash(self, config):
+        """计算配置的哈希值用于变更检测"""
+        import hashlib
+        import json
+        
+        # 只对设备配置部分进行哈希计算
+        device_configs = config.get("devices_triple", [])
+        config_json = json.dumps(device_configs, sort_keys=True)
+        return hashlib.md5(config_json.encode()).hexdigest()
+
 # 入口函数
 if __name__ == "__main__":
-    # 预先验证MQTT连接配置
-    logger.info("=== 开始预连接验证 ===")
-    try:
-        import subprocess
-        import os
-        # 运行简单连接测试 - 使用正确的根目录路径
-        script_path = os.path.join(os.path.dirname(__file__), "simple_mqtt_test.py")
-        result = subprocess.run([sys.executable, script_path], 
-                              capture_output=True, text=True, timeout=30)
-        if result.returncode == 0:
-            logger.info("✅ MQTT预连接验证成功")
-        else:
-            logger.error(f"❌ MQTT预连接验证失败: {result.stderr}")
-            logger.info("继续启动主程序，但可能存在连接问题...")
-    except Exception as e:
-        logger.warning(f"预连接验证异常，跳过: {e}")
-    
     # 创建网关实例
     gateway = GatewayManager()
     
