@@ -22,12 +22,13 @@ COPY requirements.txt /app/
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制应用程序文件
-COPY main.py /app/
 COPY config_manager.py /app/
-COPY ntp_sync.py /app/
+COPY main.py /app/
 COPY state_monitor.py /app/
-COPY device_discovery/ /app/device_discovery/
+COPY ntp_sync.py /app/
+COPY options.json /app/
 COPY iot_push/ /app/iot_push/
+COPY device_discovery/ /app/device_discovery/
 
 # 复制启动脚本
 COPY run /app/run.sh
