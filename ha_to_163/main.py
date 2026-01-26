@@ -211,14 +211,14 @@ class GatewayManager:
         logger.info("=== 开始初始设备发现 ===")
         device_configs = self.config_manager.get_all_enabled_devices()
         
-        # 为每个设备配置添加支持的属性列表
+        # 为每个设备配置添加支持的属性列表（统一使用IoT原生参数名）
         for device_config in device_configs:
             if "supported_properties" not in device_config:
-                # 默认支持的属性（米家智能插座）
+                # 默认支持的属性（米家智能插座，使用IoT原生参数名）
                 device_config["supported_properties"] = [
-                    "all_switch", "jack_1", "jack_2", "jack_3", "jack_4", "jack_5", "jack_6",
-                    "electric_power", "electric_current", "voltage", "power_consumption",
-                    "default_power_on_state"
+                    "state0", "state1", "state2", "state3", "state4", "state5", "state6",
+                    "active_power", "current", "voltage", "energy", 
+                    "default"
                 ]
         
         discovered_devices = self.discovery.discover_all_devices(device_configs)
@@ -461,13 +461,13 @@ class GatewayManager:
                 new_device_configs = [d for d in current_device_configs 
                                     if d["device_id"] in new_device_ids and d.get("enabled", False)]
                 
-                # 为新设备配置添加默认支持的属性
+                # 为新设备配置添加默认支持的属性（使用IoT原生参数名）
                 for device_config in new_device_configs:
                     if "supported_properties" not in device_config:
                         device_config["supported_properties"] = [
-                            "all_switch", "jack_1", "jack_2", "jack_3", "jack_4", "jack_5", "jack_6",
-                            "electric_power", "electric_current", "voltage", "power_consumption",
-                            "default_power_on_state"
+                            "state0", "state1", "state2", "state3", "state4", "state5", "state6",
+                            "active_power", "current", "voltage", "energy",
+                            "default"
                         ]
                 
                 # 执行新设备的发现（不影响现有设备）
