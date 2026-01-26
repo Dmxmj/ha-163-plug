@@ -242,19 +242,26 @@ class NeteaseIoTClient:
         else:
             self.logger.debug(f"MQTT调试: {buf}")
 
-    def _publish(self, data: Dict, topic: str):
+    def _publish(self, data: Dict, topic: str) -> bool:
         """安全发布消息"""
         if not self.connected or not self.enabled:
-            return
+            self.logger.warning(f"MQTT连接不可用或设备已禁用，跳过发布到{topic}")
+            return False
         
         try:
             payload = json.dumps(data, ensure_ascii=False)
+            self.logger.debug(f"推送到{topic}: {payload}")
             result = self.client.publish(topic, payload, qos=1)
             result.wait_for_publish()
             if result.rc != mqtt.MQTT_ERR_SUCCESS:
                 self.logger.error(f"发布失败，错误码{result.rc}")
+                return False
+            else:
+                self.logger.debug(f"发布成功到{topic}")
+                return True
         except Exception as e:
             self.logger.error(f"发布异常: {str(e)}")
+            return False
 
     def _sync_to_ha(self, params: Dict):
         """同步命令到HA"""
@@ -402,31 +409,48 @@ class NeteaseIoTClient:
         self.logger.info(f"属性推送成功: {payload}")
 
     def _convert_ha_data(self, ha_data: Dict) -> Dict:
-        """转换HA数据为IoT格式"""
+        """转换HA数据为IoT格式（按照物模型规范）"""
+        # 根据物模型定义的属性映射
         data_map = {
-            "all_switch": "state0",
-            "jack_1": "state1",
-            "jack_2": "state2",
-            "jack_3": "state3",
-            "jack_4": "state4",
-            "jack_5": "state5",
-            "jack_6": "state6",
-            "default_power_on_state": "default",
-            "electric_power": "active_power",
-            "electric_current": "current",
-            "voltage": "voltage",
-            "power_consumption": "energy"
+            "all_switch": "state0",           # 全开 (0-1)
+            "jack_1": "state1",               # 插孔1 (0-1) 
+            "jack_2": "state2",               # 插孔2 (0-1)
+            "jack_3": "state3",               # 插孔3 (0-1)
+            "jack_4": "state4",               # 插孔4 (0-1)
+            "jack_5": "state5",               # 插孔5 (0-1)
+            "jack_6": "state6",               # 插孔6 (0-1)
+            "default_power_on_state": "default", # 默认状态功能 (0-2)
+            "voltage": "voltage",             # 电压 (0-400, float, V)
+            "electric_current": "current",    # 电流 (0-9999, float, A)
+            "electric_power": "active_power", # 功率 (0-9999999, float, W)
+            "power_consumption": "energy"     # 用电量 (0-9999999, float, kwh)
+            # frequency 频率属性暂时没有对应的HA实体，如果有可以添加
         }
         
         converted = {}
         for ha_key, value in ha_data.items():
             iot_key = data_map.get(ha_key)
             if iot_key and value is not None:
-                converted[iot_key] = value
+                # 值类型转换
+                if iot_key in ["state0", "state1", "state2", "state3", "state4", "state5", "state6"]:
+                    # 开关类型：确保为整数 0 或 1
+                    converted[iot_key] = 1 if value in [1, "1", "on", True, "True"] else 0
+                elif iot_key == "default":
+                    # 默认状态：0关闭,1开启,2记忆
+                    converted[iot_key] = int(value) if isinstance(value, (int, float)) else 0
+                else:
+                    # 传感器数值：确保为浮点数
+                    try:
+                        converted[iot_key] = float(value)
+                    except (ValueError, TypeError):
+                        self.logger.warning(f"无法转换{ha_key}的值{value}为浮点数")
+                        continue
+        
+        self.logger.debug(f"数据转换: {ha_data} -> {converted}")
         return converted
 
     def push_subdevice_property(self, device_config: Dict[str, any], ha_data: Dict):
-        """推送子设备属性数据（通过网关连接）"""
+        """推送子设备属性数据（按照网易IoT物模型规范）"""
         if not self.connected or not self.enabled or not ha_data or not device_config:
             self.logger.warning(f"无法推送子设备数据: connected={self.connected}, enabled={self.enabled}")
             return False
@@ -447,31 +471,22 @@ class NeteaseIoTClient:
                 self.logger.warning(f"子设备{subdevice_id}无有效数据可推送")
                 return False
             
-            # 构造子设备属性上报消息
+            # 构造属性上报消息（按照物模型规范）
             payload = {
                 "id": str(int(time.time() * 1000)),
-                "version": "1.0",
-                "params": {
-                    "properties": converted_data,
-                    "subDevices": [
-                        {
-                            "productKey": subdevice_product_key,
-                            "deviceName": subdevice_device_name
-                        }
-                    ]
-                },
-                "method": "thing.event.property.post"
+                "params": converted_data
             }
             
-            # 发布到子设备属性上报Topic  
-            topic = f"/thing/topo/property/post"
+            # 使用正确的属性上报Topic：sys/ProductKey/DeviceName/event/property/post
+            topic = f"sys/{subdevice_product_key}/{subdevice_device_name}/event/property/post"
             success = self._publish(payload, topic)
             
             if success:
-                self.logger.debug(f"子设备{subdevice_id}属性数据推送成功: {converted_data}")
+                self.logger.info(f"✅ 子设备{subdevice_id}属性数据推送成功: {converted_data}")
+                self.logger.info(f"推送Topic: {topic}")
                 return True
             else:
-                self.logger.error(f"子设备{subdevice_id}属性数据推送失败")
+                self.logger.error(f"❌ 子设备{subdevice_id}属性数据推送失败")
                 return False
                 
         except Exception as e:
