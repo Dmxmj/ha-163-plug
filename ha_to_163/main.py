@@ -247,27 +247,36 @@ class GatewayManager:
                         
                         # 读取HA实体值（容错读取，单个实体失败不影响）
                         ha_data = {}
-                        sensors = device_info.get("sensors", {})
-                        # === 调试补丁开始 ===
+                        
+                        # === 修复数据结构不一致问题 ===
                         logger.info(f"=== 设备{device_id}数据结构调试 ===")
                         logger.info(f"device_info类型: {type(device_info)}")
                         logger.info(f"device_info内容: {device_info}")
+                        
+                        # 检测并修复数据结构问题
                         if isinstance(device_info, dict):
                             logger.info(f"device_info包含的键: {list(device_info.keys())}")
+                            
+                            # 情况1：正确的数据结构（包含sensors键）
                             if 'sensors' in device_info:
-                                sensors_data = device_info['sensors']
-                                logger.info(f"sensors数据类型: {type(sensors_data)}")
-                                logger.info(f"sensors数据内容: {sensors_data}")
-                                if isinstance(sensors_data, dict):
-                                    logger.info(f"sensors键列表: {list(sensors_data.keys())}")
-                                else:
-                                    logger.error(f"sensors不是字典类型: {type(sensors_data)}")
+                                sensors = device_info['sensors']
+                                logger.info(f"✅ 正确数据结构，sensors类型: {type(sensors)}")
+                                logger.info(f"sensors数量: {len(sensors) if isinstance(sensors, dict) else 'N/A'}")
+                            
+                            # 情况2：数据被拍平了（device_info直接就是传感器映射）
+                            elif all(isinstance(v, str) and ('sensor.' in v or 'switch.' in v or 'select.' in v) for v in device_info.values() if isinstance(v, str)):
+                                logger.warning("⚠️ 检测到数据结构被拍平，正在修复...")
+                                sensors = device_info  # device_info本身就是传感器映射
+                                logger.info(f"修复后sensors数量: {len(sensors)}")
+                            
+                            # 情况3：其他情况
                             else:
-                                logger.error(f"device_info缺少sensors键")
+                                logger.error("❌ 无法识别的数据结构")
+                                sensors = {}
                         else:
                             logger.error(f"device_info不是字典类型: {type(device_info)}")
-                        # === 调试补丁结束 ===
-
+                            sensors = {}
+                        
                         logger.info(f"设备{device_id}可用传感器: {list(sensors.keys())}")
                         
                         # 调试：显示完整的device_info结构
