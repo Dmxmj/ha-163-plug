@@ -120,16 +120,30 @@ class NeteaseIoTClient:
             self.reconnect_delay = 1  # 重置重连延迟
             self.logger.info(f"MQTT连接成功: {self.device_id} (ClientID: {self.device_name})")
             
-            # 订阅控制主题（参考工作代码的订阅逻辑）
+            # 订阅网关自己的控制主题
             client.subscribe(self.topic_control, qos=1)
             self.subscribed_topics.add(self.topic_control)
-            self.logger.info(f"订阅控制Topic: {self.topic_control}")
+            self.logger.info(f"订阅网关控制Topic: {self.topic_control}")
             
-            # 订阅子设备属性设置主题（如果是网关设备）
-            property_set_topic = f"thing/service/property/set"
-            client.subscribe(property_set_topic, qos=1)
-            self.subscribed_topics.add(property_set_topic)
-            self.logger.info(f"订阅属性设置Topic: {property_set_topic}")
+            # ✅ 关键修复：如果是网关设备，订阅所有子设备的控制主题
+            if hasattr(self, 'subdevice_configs') and self.subdevice_configs:
+                for subdevice_config in self.subdevice_configs:
+                    subdevice_pk = subdevice_config.get("product_key")
+                    subdevice_dn = subdevice_config.get("device_name")
+                    if subdevice_pk and subdevice_dn:
+                        # 订阅子设备控制主题
+                        subdevice_control_topic = f"sys/{subdevice_pk}/{subdevice_dn}/service/CommonService"
+                        client.subscribe(subdevice_control_topic, qos=1)
+                        self.subscribed_topics.add(subdevice_control_topic)
+                        self.logger.info(f"✅ 订阅子设备控制Topic: {subdevice_control_topic}")
+                        
+                        # 订阅子设备属性设置主题（备用）
+                        subdevice_property_set_topic = f"sys/{subdevice_pk}/{subdevice_dn}/thing/service/property/set"
+                        client.subscribe(subdevice_property_set_topic, qos=1)
+                        self.subscribed_topics.add(subdevice_property_set_topic)
+                        self.logger.info(f"✅ 订阅子设备属性设置Topic: {subdevice_property_set_topic}")
+            else:
+                self.logger.warning("❌ 网关未配置子设备信息，无法订阅子设备控制主题")
             
             # 重连后同步状态（首次连接跳过）
             if self.sync_on_reconnect and (self.reconnect_count > 0 or self.cached_states or self.pending_states):
@@ -158,29 +172,81 @@ class NeteaseIoTClient:
                 self._schedule_reconnect()
 
     def _on_message(self, client, userdata, msg):
-        """消息回调"""
+        """消息回调 - 处理云端下发的控制指令"""
         try:
+            topic = msg.topic
             payload = json.loads(msg.payload.decode("utf-8"))
-            self.logger.info(f"收到命令: {payload}")
+            self.logger.info(f"🔔 收到控制指令: Topic={topic}, Payload={payload}")
             
             cmd_id = payload.get("id")
             params = payload.get("params", {})
-            reply = {"id": cmd_id, "code": RESPONSE_CODE["success"], "data": {}}
             
-            # 处理命令（简化版，可根据实际需求扩展）
-            for param, value in params.items():
-                reply["data"][param] = value
-            
-            self._publish(reply, self.topic_control_reply)
-            self._sync_to_ha(params)
+            # 提取子设备信息（从Topic中解析）
+            # Topic格式: sys/{product_key}/{device_name}/service/CommonService
+            topic_parts = topic.split("/")
+            if len(topic_parts) >= 5 and topic_parts[0] == "sys":
+                subdevice_product_key = topic_parts[1]
+                subdevice_device_name = topic_parts[2]
+                
+                self.logger.info(f"📝 解析子设备信息: ProductKey={subdevice_product_key}, DeviceName={subdevice_device_name}")
+                
+                # 查找对应的子设备配置
+                target_device_config = None
+                if hasattr(self, 'subdevice_configs') and self.subdevice_configs:
+                    for device_config in self.subdevice_configs:
+                        if (device_config.get("product_key") == subdevice_product_key and 
+                            device_config.get("device_name") == subdevice_device_name):
+                            target_device_config = device_config
+                            break
+                
+                if target_device_config:
+                    device_id = target_device_config.get("device_id", "未知设备")
+                    entity_prefix = target_device_config.get("entity_prefix", "未知前缀")
+                    
+                    self.logger.info(f"✅ 找到目标子设备: {device_id} (前缀: {entity_prefix})")
+                    
+                    # 同步控制指令到HA
+                    success = self._sync_to_ha_with_prefix(params, entity_prefix)
+                    
+                    # 构造回复消息
+                    if success:
+                        reply = {"id": cmd_id, "code": RESPONSE_CODE["success"], "data": params}
+                        self.logger.info(f"✅ 子设备{device_id}控制指令执行成功")
+                    else:
+                        reply = {"id": cmd_id, "code": RESPONSE_CODE["failed"], "data": {}}
+                        self.logger.error(f"❌ 子设备{device_id}控制指令执行失败")
+                    
+                    # 发送回复到对应的子设备回复主题
+                    reply_topic = f"sys/{subdevice_product_key}/{subdevice_device_name}/service/CommonService_reply"
+                    self._publish(reply, reply_topic)
+                    
+                else:
+                    self.logger.warning(f"⚠️ 未找到对应的子设备配置: {subdevice_product_key}/{subdevice_device_name}")
+                    
+                    # 发送失败回复
+                    error_reply = {"id": cmd_id, "code": RESPONSE_CODE["param_error"], "data": {}}
+                    reply_topic = f"sys/{subdevice_product_key}/{subdevice_device_name}/service/CommonService_reply"
+                    self._publish(error_reply, reply_topic)
+            else:
+                self.logger.warning(f"⚠️ 无法解析控制指令Topic: {topic}")
+                
         except Exception as e:
-            self.logger.error(f"处理命令失败: {str(e)}")
-            error_reply = {
-                "id": str(int(time.time()*1000)),
-                "code": RESPONSE_CODE["failed"],
-                "data": {}
-            }
-            self._publish(error_reply, self.topic_control_reply)
+            self.logger.error(f"处理控制指令失败: {str(e)}")
+            try:
+                # 尽力发送错误回复
+                error_reply = {
+                    "id": payload.get("id", str(int(time.time()*1000))),
+                    "code": RESPONSE_CODE["failed"], 
+                    "data": {}
+                }
+                # 如果能解析到子设备信息，就发送到对应主题
+                if topic and "sys/" in topic:
+                    parts = topic.split("/")
+                    if len(parts) >= 3:
+                        error_topic = f"sys/{parts[1]}/{parts[2]}/service/CommonService_reply"
+                        self._publish(error_reply, error_topic)
+            except:
+                pass
 
     def _on_disconnect(self, client, userdata, rc):
         """断开连接回调函数"""
@@ -265,50 +331,91 @@ class NeteaseIoTClient:
 
     def _sync_to_ha(self, params: Dict):
         """同步命令到HA"""
+        return self._sync_to_ha_with_prefix(params, self.entity_prefix)
+
+    def _sync_to_ha_with_prefix(self, params: Dict, entity_prefix: str) -> bool:
+        """同步控制指令到HA（支持指定entity_prefix）"""
         ha_url = self.ha_config.get("ha_url")
         ha_headers = self.ha_config.get("ha_headers")
         if not ha_url or not ha_headers:
-            return
+            self.logger.error("HA配置不完整，无法同步控制指令")
+            return False
+        
+        success_count = 0
+        total_count = len(params)
         
         try:
-            # 简化版同步逻辑，可根据实际属性映射扩展
             ha_api_url = ha_url if ha_url.endswith("/") else f"{ha_url}/"
+            
             for param, value in params.items():
-                # 映射参数到实体ID
-                entity_id = self._map_param_to_entity(param)
-                if not entity_id:
+                try:
+                    # 映射参数到实体ID（使用指定的entity_prefix）
+                    entity_id = self._map_param_to_entity_with_prefix(param, entity_prefix)
+                    if not entity_id:
+                        self.logger.warning(f"参数{param}无法映射到HA实体")
+                        continue
+                    
+                    # 转换IoT值到HA状态
+                    if param in ["state0", "state1", "state2", "state3", "state4", "state5", "state6"]:
+                        # 开关类型
+                        ha_state = "on" if value == 1 else "off"
+                        service = "switch.turn_on" if value == 1 else "switch.turn_off"
+                        service_data = {"entity_id": entity_id}
+                    elif param == "default":
+                        # 默认状态选择器
+                        state_map = {0: "off", 1: "on", 2: "memory"}
+                        ha_state = state_map.get(value, "off")
+                        service = "select.select_option"
+                        service_data = {"entity_id": entity_id, "option": ha_state}
+                    else:
+                        # 传感器类型（只读，跳过）
+                        self.logger.debug(f"跳过只读参数{param}")
+                        continue
+                    
+                    self.logger.info(f"🎯 同步控制指令: {param}={value} → {entity_id}={ha_state}")
+                    
+                    # 调用HA服务API（比直接设置state更可靠）
+                    service_resp = requests.post(
+                        f"{ha_api_url}api/services/{service.split('.')[0]}/{service.split('.')[1]}",
+                        headers=ha_headers,
+                        json=service_data,
+                        timeout=10,
+                        verify=False
+                    )
+                    
+                    if service_resp.status_code == 200:
+                        self.logger.info(f"✅ 控制指令执行成功: {entity_id} → {ha_state}")
+                        success_count += 1
+                    else:
+                        self.logger.error(f"❌ 控制指令执行失败: {entity_id}, 状态码: {service_resp.status_code}")
+                        self.logger.error(f"响应内容: {service_resp.text}")
+                        
+                except Exception as e:
+                    self.logger.error(f"处理参数{param}时出错: {e}")
                     continue
-                
-                # 转换状态值
-                ha_state = "on" if value == 1 else "off"
-                if param == "default":
-                    state_map = {0: "off", 1: "on", 2: "memory"}
-                    ha_state = state_map.get(value, "off")
-                
-                # 调用HA API
-                resp = requests.post(
-                    f"{ha_api_url}states/{entity_id}",
-                    headers=ha_headers,
-                    json={"state": ha_state},
-                    timeout=5,
-                    verify=False
-                )
-                resp.raise_for_status()
-                self.logger.info(f"同步到HA成功: {entity_id} = {ha_state}")
+            
+            self.logger.info(f"控制指令同步完成: {success_count}/{total_count} 成功")
+            return success_count == total_count
+            
         except Exception as e:
-            self.logger.error(f"同步到HA失败: {str(e)}")
+            self.logger.error(f"同步控制指令到HA失败: {e}")
+            return False
 
     def _map_param_to_entity(self, param: str) -> Optional[str]:
         """映射IoT参数到HA实体ID"""
+        return self._map_param_to_entity_with_prefix(param, self.entity_prefix)
+
+    def _map_param_to_entity_with_prefix(self, param: str, entity_prefix: str) -> Optional[str]:
+        """映射IoT参数到HA实体ID（支持指定entity_prefix）"""
         param_map = {
-            "state0": f"switch.{self.entity_prefix}_on_p_2_1",
-            "state1": f"switch.{self.entity_prefix}_on_p_7_1",
-            "state2": f"switch.{self.entity_prefix}_on_p_8_1",
-            "state3": f"switch.{self.entity_prefix}_on_p_9_1",
-            "state4": f"switch.{self.entity_prefix}_on_p_10_1",
-            "state5": f"switch.{self.entity_prefix}_on_p_11_1",
-            "state6": f"switch.{self.entity_prefix}_on_p_12_1",
-            "default": f"select.{self.entity_prefix}_default_power_on_state_p_2_2"
+            "state0": f"switch.{entity_prefix}_on_p_2_1",
+            "state1": f"switch.{entity_prefix}_on_p_7_1",
+            "state2": f"switch.{entity_prefix}_on_p_8_1",
+            "state3": f"switch.{entity_prefix}_on_p_9_1",
+            "state4": f"switch.{entity_prefix}_on_p_10_1",
+            "state5": f"switch.{entity_prefix}_on_p_11_1",
+            "state6": f"switch.{entity_prefix}_on_p_12_1",
+            "default": f"select.{entity_prefix}_default_power_on_state_p_2_2"
         }
         return param_map.get(param)
 
