@@ -156,6 +156,37 @@ class ConfigManager:
         """获取所有启用的设备"""
         return [d for d in self.config.get("devices_triple", []) if d.get("enabled", True)]
 
+    def reload_config(self) -> Optional[Dict]:
+        """重新加载配置（用于动态发现）"""
+        try:
+            logger.debug("重新加载配置...")
+            fresh_config = self.load_from_env()
+            if fresh_config:
+                return fresh_config
+            else:
+                logger.warning("重新加载配置失败，使用缓存配置")
+                return self.config
+        except Exception as e:
+            logger.error(f"重新加载配置异常: {str(e)}")
+            return self.config
+
+    def has_config_changed(self, last_check_time: float) -> bool:
+        """检查配置是否已变更（基于文件修改时间）"""
+        try:
+            # 检查多个可能的配置文件
+            config_files = ["/data/options.json", "/config/options.json", self.config_path]
+            
+            for config_file in config_files:
+                if os.path.exists(config_file):
+                    mtime = os.path.getmtime(config_file)
+                    if mtime > last_check_time:
+                        logger.debug(f"配置文件 {config_file} 已更新")
+                        return True
+            return False
+        except Exception as e:
+            logger.debug(f"检查配置变更异常: {str(e)}")
+            return False
+
     def update_device_triple(self, device_id: str, new_config: Dict) -> bool:
         """更新设备三元组"""
         devices = self.config.get("devices_triple", [])
