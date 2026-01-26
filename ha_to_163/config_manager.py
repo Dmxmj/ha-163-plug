@@ -10,12 +10,21 @@ class ConfigManager:
     """配置管理器"""
     def __init__(self):
         self.config = {}
-        self.config_path = "/data/config.json"  # HA Add-on持久化目录
+        # 根据环境选择配置路径
+        if os.path.exists("/data") and os.access("/data", os.W_OK):
+            self.config_path = "/data/config.json"  # HA Add-on持久化目录
+        else:
+            self.config_path = "config_local.json"  # 本地开发环境
         self._ensure_config_dir()
 
     def _ensure_config_dir(self):
         """确保配置目录存在"""
-        os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
+        try:
+            config_dir = os.path.dirname(self.config_path)
+            if config_dir and not os.path.exists(config_dir):
+                os.makedirs(config_dir, exist_ok=True)
+        except (OSError, PermissionError) as e:
+            logger.warning(f"无法创建配置目录: {e}")
 
     def load_from_env(self) -> Dict:
         """从环境变量加载配置（HA Add-on传递）"""
