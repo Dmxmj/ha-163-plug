@@ -114,52 +114,79 @@ class GatewayManager:
         return False
 
     def _init_iot_clients(self):
-        """初始化IoT客户端（线程安全）"""
+        """初始化IoT客户端（网关模式：一个连接管理所有子设备）"""
         with self.lock:
-            # 获取所有启用的设备配置
-            device_configs = self.config_manager.get_all_enabled_devices()
+            # 使用网关三元组创建单一MQTT连接
+            gateway_config = self.config["gateway_triple"]
             mqtt_config = self.config["mqtt_config"]
             
-            # 为每个设备创建IoT客户端
-            for device_config in device_configs:
-                device_id = device_config["device_id"]
-                if device_id not in self.iot_clients:
-                    # 创建客户端实例
-                    client = NeteaseIoTClient(device_config, mqtt_config)
-                    # 设置HA配置（用于命令同步）
-                    client.set_ha_config({
-                        "ha_url": self.config["ha_url"],
-                        "ha_headers": {
-                            "Authorization": f"Bearer {self.config['ha_token']}",
-                            "Content-Type": "application/json"
-                        }
-                    })
-                    # 保存客户端并建立连接
-                    self.iot_clients[device_id] = client
-                    client.connect()
-                    logger.info(f"IoT客户端初始化完成: {device_id} (ProductKey: {device_config['product_key']})")
+            if not gateway_config.get("product_key") or not gateway_config.get("device_name") or not gateway_config.get("device_secret"):
+                logger.error("网关三元组配置不完整，无法建立IoT连接")
+                return
+            
+            logger.info("=== 初始化网关IoT连接 ===")
+            logger.info(f"ProductKey: {gateway_config['product_key']}")
+            logger.info(f"DeviceName: {gateway_config['device_name']}")
+            
+            # 创建网关IoT客户端（单一连接）
+            gateway_client = NeteaseIoTClient(gateway_config, mqtt_config)
+            
+            # 设置HA配置（用于命令同步）
+            gateway_client.set_ha_config({
+                "ha_url": self.config["ha_url"],
+                "ha_headers": {
+                    "Authorization": f"Bearer {self.config['ha_token']}",
+                    "Content-Type": "application/json"
+                }
+            })
+            
+            # 建立连接
+            logger.info("正在连接到网易IoT平台...")
+            if gateway_client.connect():
+                self.iot_clients["gateway"] = gateway_client
+                logger.info("✅ 网关IoT连接建立成功")
+                
+                # 获取子设备配置
+                device_configs = self.config_manager.get_all_enabled_devices()
+                logger.info(f"网关管理的子设备数量: {len(device_configs)}")
+                
+                for device_config in device_configs:
+                    device_id = device_config["device_id"]
+                    logger.info(f"  - 子设备: {device_id}")
+                
+            else:
+                logger.error("❌ 网关IoT连接建立失败")
 
     def _push_data_loop(self):
         """数据推送循环（核心业务逻辑）"""
         while self.running:
             try:
-                # 1. 获取当前已发现的所有设备
+                # 1. 检查网关连接状态
+                with self.lock:
+                    gateway_client = self.iot_clients.get("gateway")
+                
+                if not gateway_client or not gateway_client.connected:
+                    logger.warning("网关IoT连接不可用，跳过本次推送")
+                    time.sleep(self.config["report_interval"])
+                    continue
+                
+                # 2. 获取当前已发现的所有设备
                 discovered_devices = self.discovery.get_discovered_devices()
                 logger.debug(f"推送循环 - 已发现设备数: {len(discovered_devices)}")
                 
-                # 2. 逐个设备处理（单个失败不影响其他）
+                # 3. 获取启用的子设备配置
+                device_configs = self.config_manager.get_all_enabled_devices()
+                device_config_map = {d["device_id"]: d for d in device_configs}
+                
+                # 4. 逐个子设备处理数据推送
                 for device_id, device_info in discovered_devices.items():
                     try:
-                        # 线程安全获取IoT客户端
-                        with self.lock:
-                            client = self.iot_clients.get(device_id)
-                        
-                        # 跳过禁用/未初始化的客户端
-                        if not client or not client.enabled or not client.connected:
-                            logger.debug(f"设备{device_id}跳过推送（禁用/未连接）")
+                        # 检查是否是配置中的子设备
+                        if device_id not in device_config_map:
+                            logger.debug(f"设备{device_id}不在子设备配置中，跳过推送")
                             continue
                         
-                        # 3. 读取HA实体值（容错读取，单个实体失败不影响）
+                        # 读取HA实体值（容错读取，单个实体失败不影响）
                         ha_data = {}
                         sensors = device_info.get("sensors", {})
                         for prop_name, entity_id in sensors.items():
@@ -167,16 +194,22 @@ class GatewayManager:
                             if value is not None:
                                 ha_data[prop_name] = value
                         
-                        # 4. 推送数据（有有效数据才推送）
+                        # 推送子设备数据到网易IoT平台
                         if ha_data:
-                            client.push_property(ha_data)
-                            logger.debug(f"设备{device_id}推送成功，字段数: {len(ha_data)}")
+                            device_config = device_config_map[device_id]
+                            success = gateway_client.push_subdevice_property(
+                                device_config, ha_data
+                            )
+                            if success:
+                                logger.debug(f"子设备{device_id}推送成功，字段数: {len(ha_data)}")
+                            else:
+                                logger.warning(f"子设备{device_id}推送失败")
                         else:
-                            logger.debug(f"设备{device_id}无有效数据可推送")
+                            logger.debug(f"子设备{device_id}无有效数据可推送")
                     
                     except Exception as e:
                         # 单个设备推送失败，记录日志并继续处理下一个
-                        logger.error(f"设备{device_id}推送异常（已跳过）: {str(e)}")
+                        logger.error(f"子设备{device_id}推送异常（已跳过）: {str(e)}")
                         continue
                 
                 # 5. 等待推送间隔（固定60秒）
@@ -201,33 +234,24 @@ class GatewayManager:
                     retry_interval
                 )
                 
-                # 3. 为恢复的设备初始化IoT客户端
+                # 3. 如果有设备恢复，记录日志（不需要创建单独的IoT客户端）
                 if recovered_devices:
-                    with self.lock:
-                        for device_id in recovered_devices.keys():
-                            if device_id not in self.iot_clients:
-                                # 重新获取设备配置
-                                device_config = self.config_manager.get_device_triple(device_id)
-                                if device_config:
-                                    # 创建并启动IoT客户端
-                                    client = NeteaseIoTClient(device_config, self.config["mqtt_config"])
-                                    client.set_ha_config({
-                                        "ha_url": self.config["ha_url"],
-                                        "ha_headers": {
-                                            "Authorization": f"Bearer {self.config['ha_token']}",
-                                            "Content-Type": "application/json"
-                                        }
-                                    })
-                                    self.iot_clients[device_id] = client
-                                    client.connect()
-                                    logger.info(f"设备{device_id}恢复上线，已加入推送队列")
+                    for device_id in recovered_devices.keys():
+                        logger.info(f"子设备{device_id}恢复上线，将通过网关连接推送数据")
                 
-                # 4. 全量重新发现（兜底，确保配置更新生效）
+                # 4. 检查并恢复网关IoT连接
+                with self.lock:
+                    gateway_client = self.iot_clients.get("gateway")
+                    if not gateway_client or not gateway_client.connected:
+                        logger.warning("检测到网关IoT连接异常，尝试恢复...")
+                        self._init_iot_clients()  # 重新初始化网关连接
+                
+                # 5. 全量重新发现（兜底，确保配置更新生效）
                 if int(time.time()) % 3600 == 0:  # 每小时全量发现一次
                     self.discovery.discover_all_devices(device_configs)
                     logger.info("执行每小时全量设备发现，确保配置最新")
                 
-                # 5. 等待重试间隔（固定300秒）
+                # 6. 等待重试间隔（固定300秒）
                 time.sleep(retry_interval)
             
             except Exception as e:
