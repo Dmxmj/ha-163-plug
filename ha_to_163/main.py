@@ -8,7 +8,7 @@ from config_manager import ConfigManager
 from device_discovery.ha_discovery import HADiscovery
 from iot_push.iot_client import NeteaseIoTClient
 from ntp_sync import sync_time_with_netease_ntp
-from state_monitor import HAStateMonitor
+# from state_monitor import HAStateMonitor  # 移除状态监听功能
 
 # 全局日志配置
 logging.basicConfig(
@@ -35,7 +35,7 @@ class GatewayManager:
         self.push_thread = None
         self.discovery_thread = None
         self.dynamic_discovery_thread = None  # 动态发现线程
-        self.state_monitor = None  # 状态变化监听器
+        # self.state_monitor = None  # 状态变化监听器 - 已移除
         self.lock = threading.Lock()  # 线程安全锁
         
         # 动态设备发现状态
@@ -79,13 +79,13 @@ class GatewayManager:
         # 7. 标记运行状态（先标记运行状态）
         self.running = True
         
-        # 8. 延迟初始化状态变化监听器（等待HA实体完全就绪）
-        delay_thread = threading.Thread(
-            target=self._delayed_state_monitor_init,
-            name="DelayedStateMonitorInit",
-            daemon=True
-        )
-        delay_thread.start()
+        # 8. 移除状态变化监听器（已禁用实时监听功能）
+        # delay_thread = threading.Thread(
+        #     target=self._delayed_state_monitor_init,
+        #     name="DelayedStateMonitorInit",
+        #     daemon=True
+        # )
+        # delay_thread.start()
         logger.info("=== 网关初始化完成 ===")
         return True
 
@@ -376,13 +376,13 @@ class GatewayManager:
         logger.info("=== 开始优雅退出网关 ===")
         self.running = False
         
-        # 关闭状态监听器
-        if self.state_monitor:
-            try:
-                self.state_monitor.stop()
-                logger.info("状态监听器已关闭")
-            except Exception as e:
-                logger.error(f"关闭状态监听器失败: {str(e)}")
+        # 状态监听器已移除 
+        # if self.state_monitor:
+        #     try:
+        #         self.state_monitor.stop()
+        #         logger.info("状态监听器已关闭")
+        #     except Exception as e:
+        #         logger.error(f"关闭状态监听器失败: {str(e)}")
         
         # 关闭所有IoT客户端连接
         with self.lock:
@@ -511,137 +511,10 @@ class GatewayManager:
         self.last_config_check = int(time.time())
         logger.info(f"动态发现初始化完成，活跃设备数: {len(self.active_device_configs)}")
 
-    def _delayed_state_monitor_init(self):
-        """延迟初始化状态监听器（等待HA实体完全就绪）"""
-        try:
-            logger.info("⏳ 等待30秒，确保HA实体完全就绪...")
-            time.sleep(30)  # 等待30秒，让HA实体完全初始化
-            
-            if not self.running:
-                logger.info("网关已停止，取消状态监听器初始化")
-                return
-            
-            logger.info("🚀 开始延迟初始化状态变化监听器...")
-            self._initialize_state_monitor()
-            
-        except Exception as e:
-            logger.error(f"延迟状态监听器初始化失败: {e}")
-
-    def _on_state_change(self, entity_id, old_value, new_value):
-        """状态变化回调 - 当本地设备状态改变时立即推送到云端"""
-        try:
-            logger.info(f"检测到状态变化: {entity_id} {old_value} → {new_value}")
-            
-            # 查找该实体属于哪个设备和属性
-            discovered_devices = self.discovery.get_discovered_devices()
-            device_config_map = {d["device_id"]: d for d in self.config_manager.get_all_enabled_devices()}
-            
-            for device_id, device_info in discovered_devices.items():
-                # 处理数据结构
-                if isinstance(device_info, dict):
-                    if 'sensors' in device_info:
-                        sensors = device_info['sensors']
-                    else:
-                        sensors = device_info
-                    
-                    # 查找匹配的实体
-                    for prop_name, mapped_entity_id in sensors.items():
-                        if mapped_entity_id == entity_id:
-                            logger.info(f"找到变化实体: 设备{device_id}, 属性{prop_name}")
-                            
-                            # 获取设备配置
-                            if device_id not in device_config_map:
-                                logger.warning(f"设备{device_id}不在配置中，跳过推送")
-                                return
-                            
-                            device_config = device_config_map[device_id]
-                            
-                            # 构造要推送的数据（只推送变化的属性）
-                            ha_data = {prop_name: new_value}
-                            
-                            # 通过网关推送数据
-                            with self.lock:
-                                gateway_client = self.iot_clients.get("gateway")
-                                if gateway_client and gateway_client.connected:
-                                    success = gateway_client.push_subdevice_property(
-                                        device_config, ha_data
-                                    )
-                                    if success:
-                                        logger.info(f"✅ 状态变化推送成功: 设备{device_id}, {prop_name}={new_value}")
-                                    else:
-                                        logger.warning(f"❌ 状态变化推送失败: 设备{device_id}, {prop_name}={new_value}")
-                                else:
-                                    logger.warning("网关IoT连接不可用，状态变化推送失败")
-                            return  # 找到匹配实体后退出
-            
-            logger.warning(f"未找到实体{entity_id}对应的设备配置")
-            
-        except Exception as e:
-            logger.error(f"状态变化回调处理异常: {str(e)}", exc_info=True)
-
-    def _initialize_state_monitor(self):
-        """初始化状态变化监听器"""
-        try:
-            # HA配置
-            ha_config = {
-                "ha_url": self.config["ha_url"],
-                "ha_headers": {
-                    "Authorization": f"Bearer {self.config['ha_token']}",
-                    "Content-Type": "application/json"
-                }
-            }
-            
-            # 获取设备配置
-            device_configs = self.config_manager.get_all_enabled_devices()
-            
-            # 创建状态监听器
-            self.state_monitor = HAStateMonitor(ha_config, device_configs)
-            
-            # 收集需要监控的实体ID（仅监控开关状态，排除电流电量等传感器）
-            monitored_entities = set()
-            discovered_devices = self.discovery.get_discovered_devices()
-            
-            # 定义需要实时监控的属性（开关状态相关）
-            switch_related_properties = {
-                'all_switch', 'jack_1', 'jack_2', 'jack_3', 'jack_4', 'jack_5', 'jack_6',
-                'default_power_on_state'  # 开关相关的配置属性
-            }
-            
-            for device_id, device_info in discovered_devices.items():
-                # 处理数据结构
-                if isinstance(device_info, dict):
-                    if 'sensors' in device_info:
-                        sensors = device_info['sensors']
-                    else:
-                        sensors = device_info
-                    
-                    for prop_name, entity_id in sensors.items():
-                        if isinstance(entity_id, str) and '.' in entity_id:
-                            # 只监控开关状态相关的实体，跳过电流电量等传感器
-                            if prop_name in switch_related_properties:
-                                # 额外检查：确保是switch或select类型的实体
-                                if entity_id.startswith(('switch.', 'select.', 'binary_sensor.')):
-                                    monitored_entities.add(entity_id)
-                                    logger.info(f"添加状态监控: 设备{device_id}, 属性{prop_name} → {entity_id}")
-                            else:
-                                logger.debug(f"跳过传感器监控: 设备{device_id}, 属性{prop_name} → {entity_id} (等待60s周期上报)")
-            
-            # 添加监控实体
-            if monitored_entities:
-                self.state_monitor.add_monitored_entities(monitored_entities)
-                logger.info(f"状态监听器配置了 {len(monitored_entities)} 个监控实体")
-            
-            # 注册状态变化回调
-            self.state_monitor.register_change_callback(self._on_state_change)
-            
-            # 启动监听器
-            self.state_monitor.start()
-            
-            logger.info("✅ 状态变化监听器初始化成功")
-            
-        except Exception as e:
-            logger.error(f"状态变化监听器初始化失败: {e}")
-            self.state_monitor = None
+    # 状态监听相关方法已移除
+    # def _delayed_state_monitor_init(self):
+    # def _on_state_change(self, entity_id, old_value, new_value):
+    # def _initialize_state_monitor(self):
 
     def _get_config_hash(self, config):
         """计算配置的哈希值用于变更检测"""
