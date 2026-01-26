@@ -3,6 +3,7 @@ FROM homeassistant/aarch64-base:latest
 
 # 安装依赖包
 RUN apk add --no-cache \
+    bash \
     chrony \
     python3 \
     py3-pip \
@@ -12,13 +13,6 @@ RUN apk add --no-cache \
     && rm -rf /var/cache/apk/* \
     && ln -sf python3 /usr/bin/python \
     && ln -sf pip3 /usr/bin/pip
-
-# 创建 s6-overlay 服务目录
-RUN mkdir -p /etc/services.d/gateway
-
-# 复制启动脚本
-COPY run /etc/services.d/gateway/run
-RUN chmod 755 /etc/services.d/gateway/run
 
 # 设置工作目录
 WORKDIR /app
@@ -34,5 +28,16 @@ COPY ntp_sync.py /app/
 COPY device_discovery/ /app/device_discovery/
 COPY iot_push/ /app/iot_push/
 
+# 复制启动脚本
+COPY run /app/run.sh
+RUN chmod +x /app/run.sh
+
 # 设置环境变量
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+# 创建数据目录
+RUN mkdir -p /data
+
+# 设置入口点
+CMD ["/app/run.sh"]
