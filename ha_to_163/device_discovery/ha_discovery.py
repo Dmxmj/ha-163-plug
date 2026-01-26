@@ -5,32 +5,30 @@ import logging
 from typing import Dict, List, Optional
 from .base_discovery import BaseDiscovery
 
-# 属性映射（米家插座实体→内部字段）
+# 属性映射（使用IoT原生参数名，避免双重转换）
 PROPERTY_MAPPING = {
-    # 原有传感器（保留）
-    "temperature": "temperature",
-    "humidity": "humidity",
-    "battery": "battery",
-    # 插座开关
-    "on_p_2_1": "all_switch",
-    "on_p_7_1": "jack_1",
-    "on_p_8_1": "jack_2",
-    "on_p_9_1": "jack_3",
-    "on_p_10_1": "jack_4",
-    "on_p_11_1": "jack_5",
-    "on_p_12_1": "jack_6",
-    # 电量相关
-    "electric_power_p_3_2": "electric_power",
-    "electric_current_p_3_4": "electric_current",
-    "voltage_p_3_5": "voltage",
-    "power_consumption_p_3_1": "power_consumption",
-    # 默认上电状态
-    "default_power_on_state_p_2_2": "default_power_on_state",
-    # 兜底匹配
-    "electric_power": "electric_power",
-    "electric_current": "electric_current",
-    "voltage": "voltage",
-    "power_consumption": "power_consumption",
+    # 标准开关插座属性映射（直接映射到IoT参数名）
+    "child_lock_p_14_9": "child_lock",
+    "switch_status_p_10_1": "switch_status", 
+    "toggle_a_2_1": "toggle",
+    "on_p_2_1": "state0",      # 总开关 → state0
+    "on_p_7_1": "state1",      # 插口1 → state1
+    "on_p_8_1": "state2",      # 插口2 → state2
+    "on_p_9_1": "state3",      # 插口3 → state3
+    "on_p_10_1": "state4",     # 插口4 → state4
+    "on_p_11_1": "state5",     # 插口5 → state5
+    "on_p_12_1": "state6",     # 插口6 → state6
+    "default_power_on_state_p_2_2": "default",
+    "electric_power_p_2_6": "active_power",
+    "electric_current_p_2_7": "current", 
+    "voltage_p_2_8": "voltage",
+    "power_consumption_p_2_9": "energy",
+    "power_consumption_accumulation_way_p_3_3": "power_consumption_accumulation_way",
+    "indicator_light_p_2_4": "indicator_light",
+    # 数值传感器
+    "power": "active_power",
+    "current": "current",
+    "energy": "energy"
 }
 
 class HADiscovery(BaseDiscovery):
@@ -157,15 +155,17 @@ class HADiscovery(BaseDiscovery):
 
             if sensor_map:
                 self.logger.info(f"设备{device_id}发现成功，匹配到{len(sensor_map)}个实体")
-                self.discovered_devices[device_id] = sensor_map
-                # 从失败列表移除
-                if device_id in self.failed_devices:
-                    del self.failed_devices[device_id]
-                return {
+                # 保存为统一的数据结构
+                device_result = {
                     "device_id": device_id,
                     "config": device_config,
                     "sensors": sensor_map
                 }
+                self.discovered_devices[device_id] = device_result
+                # 从失败列表移除
+                if device_id in self.failed_devices:
+                    del self.failed_devices[device_id]
+                return device_result
             else:
                 self.logger.warning(f"设备{device_id}未匹配到任何实体")
                 self.failed_devices[device_id] = time.time()
