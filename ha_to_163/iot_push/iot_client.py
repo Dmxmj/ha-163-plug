@@ -4,8 +4,25 @@ import logging
 import time
 from typing import Dict, Any, Optional
 import paho.mqtt.client as mqtt
-from iot_model.config import RESPONSE_CODE, VALUE_MEANING
 import requests
+
+# 网易IoT响应码配置
+RESPONSE_CODE = {
+    "success": 0,
+    "failed": 1,
+    "timeout": 2,
+    "param_error": 3
+}
+
+# 值映射配置
+VALUE_MEANING = {
+    "on": 1,
+    "off": 0,
+    True: 1,
+    False: 0,
+    "True": 1,
+    "False": 0
+}
 
 class NeteaseIoTClient:
     """IoT客户端（动态设备版）"""
