@@ -179,6 +179,9 @@ class GatewayManager:
             # ✅ 关键修复：设置子设备配置信息
             device_configs = self.config_manager.get_all_enabled_devices()
             gateway_client.subdevice_configs = device_configs  # 添加子设备配置到网关客户端
+            
+            # ✅ 新增：设置设备发现模块引用，用于获取实体映射
+            gateway_client.discovery = self.discovery
             logger.info(f"网关配置了 {len(device_configs)} 个子设备")
             
             # 建立连接
