@@ -25,6 +25,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY main.py /app/
 COPY config_manager.py /app/
 COPY ntp_sync.py /app/
+COPY state_monitor.py /app/
 COPY device_discovery/ /app/device_discovery/
 COPY iot_push/ /app/iot_push/
 
