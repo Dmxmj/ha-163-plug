@@ -439,7 +439,56 @@ class NeteaseIoTClient:
         return self._map_param_to_entity_with_prefix(param, self.entity_prefix)
 
     def _map_param_to_entity_with_prefix(self, param: str, entity_prefix: str) -> Optional[str]:
-        """映射IoT参数到HA实体ID（支持指定entity_prefix）"""
+        """映射IoT参数到HA实体ID（优先使用发现的映射，降级到硬编码）"""
+        # 首先尝试从设备发现结果中获取真实的实体映射
+        if hasattr(self, 'discovery') and self.discovery:
+            # 查找设备ID对应的实体映射
+            device_id = None
+            if hasattr(self, 'subdevice_configs') and self.subdevice_configs:
+                for device_config in self.subdevice_configs:
+                    if device_config.get("entity_prefix") == entity_prefix:
+                        device_id = device_config.get("device_id")
+                        break
+            
+            if device_id:
+                discovered_devices = self.discovery.get_discovered_devices()
+                device_info = discovered_devices.get(device_id)
+                
+                if device_info:
+                    # 处理数据结构（和推送时保持一致）
+                    if isinstance(device_info, dict):
+                        if 'sensors' in device_info:
+                            sensors = device_info['sensors']
+                        else:
+                            sensors = device_info
+                        
+                        # IoT参数到属性名的映射
+                        iot_param_to_property = {
+                            "state0": "all_switch",      # 总开关
+                            "state1": "jack_1",          # 插口1
+                            "state2": "jack_2",          # 插口2
+                            "state3": "jack_3",          # 插口3
+                            "state4": "jack_4",          # 插口4
+                            "state5": "jack_5",          # 插口5
+                            "state6": "jack_6",          # 插口6
+                            "default": "default_power_on_state"  # 默认上电状态
+                        }
+                        
+                        property_name = iot_param_to_property.get(param)
+                        if property_name and property_name in sensors:
+                            real_entity_id = sensors[property_name]
+                            self.logger.info(f"✅ 使用发现的实体映射: {param} → {property_name} → {real_entity_id}")
+                            return real_entity_id
+                        else:
+                            self.logger.warning(f"⚠️ 参数{param}在发现的实体中未找到对应的{property_name}")
+                else:
+                    self.logger.warning(f"⚠️ 设备{device_id}未在发现结果中找到")
+            else:
+                self.logger.warning(f"⚠️ 无法通过entity_prefix {entity_prefix}找到对应的设备ID")
+        else:
+            self.logger.warning("⚠️ 设备发现模块不可用，使用硬编码映射")
+        
+        # 降级到硬编码映射（兜底）
         param_map = {
             "state0": f"switch.{entity_prefix}_on_p_2_1",
             "state1": f"switch.{entity_prefix}_on_p_7_1",
@@ -450,7 +499,10 @@ class NeteaseIoTClient:
             "state6": f"switch.{entity_prefix}_on_p_12_1",
             "default": f"select.{entity_prefix}_default_power_on_state_p_2_2"
         }
-        return param_map.get(param)
+        fallback_entity = param_map.get(param)
+        if fallback_entity:
+            self.logger.info(f"🔄 使用硬编码映射: {param} → {fallback_entity}")
+        return fallback_entity
 
     def _init_mqtt_client(self):
         """初始化MQTT客户端，设置认证信息和回调函数"""
