@@ -248,6 +248,26 @@ class GatewayManager:
                         # 读取HA实体值（容错读取，单个实体失败不影响）
                         ha_data = {}
                         sensors = device_info.get("sensors", {})
+                        # === 调试补丁开始 ===
+                        logger.info(f"=== 设备{device_id}数据结构调试 ===")
+                        logger.info(f"device_info类型: {type(device_info)}")
+                        logger.info(f"device_info内容: {device_info}")
+                        if isinstance(device_info, dict):
+                            logger.info(f"device_info包含的键: {list(device_info.keys())}")
+                            if 'sensors' in device_info:
+                                sensors_data = device_info['sensors']
+                                logger.info(f"sensors数据类型: {type(sensors_data)}")
+                                logger.info(f"sensors数据内容: {sensors_data}")
+                                if isinstance(sensors_data, dict):
+                                    logger.info(f"sensors键列表: {list(sensors_data.keys())}")
+                                else:
+                                    logger.error(f"sensors不是字典类型: {type(sensors_data)}")
+                            else:
+                                logger.error(f"device_info缺少sensors键")
+                        else:
+                            logger.error(f"device_info不是字典类型: {type(device_info)}")
+                        # === 调试补丁结束 ===
+
                         logger.info(f"设备{device_id}可用传感器: {list(sensors.keys())}")
                         
                         # 调试：显示完整的device_info结构
