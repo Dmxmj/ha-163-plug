@@ -405,6 +405,59 @@ class NeteaseIoTClient:
                 converted[iot_key] = value
         return converted
 
+    def push_subdevice_property(self, device_config: Dict[str, any], ha_data: Dict):
+        """推送子设备属性数据（通过网关连接）"""
+        if not self.connected or not self.enabled or not ha_data or not device_config:
+            self.logger.warning(f"无法推送子设备数据: connected={self.connected}, enabled={self.enabled}")
+            return False
+        
+        try:
+            # 获取子设备信息
+            subdevice_product_key = device_config.get("product_key")
+            subdevice_device_name = device_config.get("device_name") 
+            subdevice_id = device_config.get("device_id")
+            
+            if not subdevice_product_key or not subdevice_device_name:
+                self.logger.error(f"子设备{subdevice_id}配置不完整")
+                return False
+            
+            # 转换HA数据为IoT格式
+            converted_data = self._convert_ha_data(ha_data)
+            if not converted_data:
+                self.logger.warning(f"子设备{subdevice_id}无有效数据可推送")
+                return False
+            
+            # 构造子设备属性上报消息
+            payload = {
+                "id": str(int(time.time() * 1000)),
+                "version": "1.0",
+                "params": {
+                    "properties": converted_data,
+                    "subDevices": [
+                        {
+                            "productKey": subdevice_product_key,
+                            "deviceName": subdevice_device_name
+                        }
+                    ]
+                },
+                "method": "thing.event.property.post"
+            }
+            
+            # 发布到子设备属性上报Topic  
+            topic = f"/thing/topo/property/post"
+            success = self._publish(payload, topic)
+            
+            if success:
+                self.logger.debug(f"子设备{subdevice_id}属性数据推送成功: {converted_data}")
+                return True
+            else:
+                self.logger.error(f"子设备{subdevice_id}属性数据推送失败")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"推送子设备{device_config.get('device_id')}属性数据异常: {e}")
+            return False
+
     def _cache_states(self, ha_data: Dict):
         """缓存HA实体状态"""
         try:
