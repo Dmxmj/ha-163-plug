@@ -81,14 +81,14 @@ class NeteaseIoTClient:
             
             timestamp = int(time.time())
             counter = timestamp // 300  # 每5分钟更新一次计数器
-            self.logger.debug(f"生成密码 - counter: {counter}, 时间戳: {timestamp}")
+            self.logger.info(f"密码生成参数 - 时间戳: {timestamp}, counter: {counter}, device_secret: {self.device_secret}")
             
             counter_bytes = str(counter).encode('utf-8')
             secret_bytes = self.device_secret.encode('utf-8')
             hmac_obj = hmac.new(secret_bytes, counter_bytes, hashlib.sha256)
             token = hmac_obj.digest()[:10].hex().upper()
             password = f"v1:{token}"
-            self.logger.debug(f"生成的MQTT密码: {password}")
+            self.logger.info(f"生成的MQTT密码: {password}")
             return password
         except Exception as e:
             self.logger.error(f"生成MQTT密码失败: {e}")
@@ -207,7 +207,16 @@ class NeteaseIoTClient:
             time.sleep(self.reconnect_delay)
             if self.enabled and self.reconnect_count < self.max_reconnect:
                 self.logger.info("开始重连...")
-                self.connect()
+                # 关键：每次重连都完全重新初始化，避免状态污染
+                try:
+                    if self.client:
+                        self.client.loop_stop()
+                        self.client.disconnect()
+                        self.client = None
+                    
+                    self.connect()  # 完全重新连接
+                except Exception as e:
+                    self.logger.error(f"重连异常: {e}")
         
         reconnect_thread = threading.Thread(target=delayed_reconnect, daemon=True)
         reconnect_thread.start()
@@ -302,6 +311,14 @@ class NeteaseIoTClient:
             username = self.product_key
             password = self._generate_mqtt_password()
             
+            # 每次重新创建客户端实例（避免重连时的状态问题）
+            if self.client:
+                try:
+                    self.client.loop_stop()
+                    self.client.disconnect()
+                except:
+                    pass
+            
             self.client = mqtt.Client(client_id=client_id, clean_session=True, protocol=mqtt.MQTTv311)
             self.client.username_pw_set(username=username, password=password)
             
@@ -315,7 +332,9 @@ class NeteaseIoTClient:
             self.client.on_publish = self._on_publish
             self.client.on_subscribe = self._on_subscribe
             self.client.on_log = self._on_log
-            self.logger.info("MQTT客户端初始化完成")
+            
+            self.logger.info(f"MQTT客户端初始化完成 - ClientID: {client_id}, Username: {username}")
+            self.logger.info(f"当前密码: {password}")
         except Exception as e:
             self.logger.error(f"MQTT客户端初始化失败: {e}")
             raise
