@@ -375,8 +375,14 @@ class NeteaseIoTClient:
                     self.logger.info(f"🎯 同步控制指令: {param}={value} → {entity_id}={ha_state}")
                     
                     # 先验证实体是否存在
+                    # 处理HA Add-on环境中的URL构建
+                    if ha_api_url.endswith("/api/") or ha_api_url.endswith("/api"):
+                        entity_check_url = f"{ha_api_url.rstrip('/')}/states/{entity_id}"
+                    else:
+                        entity_check_url = f"{ha_api_url}api/states/{entity_id}"
+                    
                     entity_check_resp = requests.get(
-                        f"{ha_api_url}api/states/{entity_id}",
+                        entity_check_url,
                         headers=ha_headers,
                         timeout=5,
                         verify=False
@@ -388,7 +394,13 @@ class NeteaseIoTClient:
                     
                     # 调用HA服务API（比直接设置state更可靠）
                     domain, service_name = service.split('.', 1)
-                    service_url = f"{ha_api_url}api/services/{domain}/{service_name}"
+                    
+                    # 处理HA Add-on环境中的服务URL构建
+                    if ha_api_url.endswith("/api/") or ha_api_url.endswith("/api"):
+                        service_url = f"{ha_api_url.rstrip('/')}/services/{domain}/{service_name}"
+                    else:
+                        service_url = f"{ha_api_url}api/services/{domain}/{service_name}"
+                    
                     self.logger.debug(f"🔧 调用HA服务: {service_url}")
                     self.logger.debug(f"🔧 请求数据: {service_data}")
                     
@@ -409,8 +421,15 @@ class NeteaseIoTClient:
                         
                         # 尝试通过states API直接设置（作为备用方案）
                         self.logger.info(f"🔄 尝试通过states API设置: {entity_id}")
+                        
+                        # 处理HA Add-on环境中的states API URL构建
+                        if ha_api_url.endswith("/api/") or ha_api_url.endswith("/api"):
+                            states_url = f"{ha_api_url.rstrip('/')}/states/{entity_id}"
+                        else:
+                            states_url = f"{ha_api_url}api/states/{entity_id}"
+                        
                         states_resp = requests.post(
-                            f"{ha_api_url}api/states/{entity_id}",
+                            states_url,
                             headers=ha_headers,
                             json={"state": ha_state},
                             timeout=10,
@@ -491,8 +510,14 @@ class NeteaseIoTClient:
         
         try:
             # 查询HA中的所有实体
+            # 处理HA Add-on环境中的URL构建
+            if ha_url.endswith("/api") or ha_url.endswith("/api/"):
+                states_list_url = f"{ha_url.rstrip('/')}/states"
+            else:
+                states_list_url = f"{ha_url}/api/states"
+            
             resp = requests.get(
-                f"{ha_url}/api/states",
+                states_list_url,
                 headers=ha_headers,
                 timeout=10,
                 verify=False
