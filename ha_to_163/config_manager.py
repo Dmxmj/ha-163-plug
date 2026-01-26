@@ -106,7 +106,12 @@ class ConfigManager:
             config["ha_token"] = os.environ.get("HA_TOKEN")
         if os.environ.get("DEVICE_SECRET"):
             config["gateway_triple"]["device_secret"] = os.environ.get("DEVICE_SECRET")
-            
+        
+        # 在HA Add-on环境中，使用正确的内部API地址
+        if os.path.exists("/data") and os.access("/data", os.R_OK):
+            config["ha_url"] = "http://supervisor/core/api"
+            logger.info("检测到HA Add-on环境，使用内部API地址")
+        
         self.config = config
         logger.warning("使用默认配置（请在 Add-on 配置中填写必要信息）")
         return config
