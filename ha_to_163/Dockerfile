@@ -24,7 +24,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制应用程序文件
 COPY config_manager.py /app/
 COPY main.py /app/
-COPY state_monitor.py /app/
 COPY ntp_sync.py /app/
 COPY iot_push/ /app/iot_push/
 COPY device_discovery/ /app/device_discovery/
