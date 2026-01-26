@@ -374,9 +374,26 @@ class NeteaseIoTClient:
                     
                     self.logger.info(f"🎯 同步控制指令: {param}={value} → {entity_id}={ha_state}")
                     
+                    # 先验证实体是否存在
+                    entity_check_resp = requests.get(
+                        f"{ha_api_url}api/states/{entity_id}",
+                        headers=ha_headers,
+                        timeout=5,
+                        verify=False
+                    )
+                    
+                    if entity_check_resp.status_code != 200:
+                        self.logger.error(f"❌ 实体{entity_id}不存在或不可访问，状态码: {entity_check_resp.status_code}")
+                        continue
+                    
                     # 调用HA服务API（比直接设置state更可靠）
+                    domain, service_name = service.split('.', 1)
+                    service_url = f"{ha_api_url}api/services/{domain}/{service_name}"
+                    self.logger.debug(f"🔧 调用HA服务: {service_url}")
+                    self.logger.debug(f"🔧 请求数据: {service_data}")
+                    
                     service_resp = requests.post(
-                        f"{ha_api_url}api/services/{service.split('.')[0]}/{service.split('.')[1]}",
+                        service_url,
                         headers=ha_headers,
                         json=service_data,
                         timeout=10,
@@ -389,6 +406,22 @@ class NeteaseIoTClient:
                     else:
                         self.logger.error(f"❌ 控制指令执行失败: {entity_id}, 状态码: {service_resp.status_code}")
                         self.logger.error(f"响应内容: {service_resp.text}")
+                        
+                        # 尝试通过states API直接设置（作为备用方案）
+                        self.logger.info(f"🔄 尝试通过states API设置: {entity_id}")
+                        states_resp = requests.post(
+                            f"{ha_api_url}api/states/{entity_id}",
+                            headers=ha_headers,
+                            json={"state": ha_state},
+                            timeout=10,
+                            verify=False
+                        )
+                        
+                        if states_resp.status_code in [200, 201]:
+                            self.logger.info(f"✅ 通过states API设置成功: {entity_id} → {ha_state}")
+                            success_count += 1
+                        else:
+                            self.logger.error(f"❌ states API也失败: {entity_id}, 状态码: {states_resp.status_code}")
                         
                 except Exception as e:
                     self.logger.error(f"处理参数{param}时出错: {e}")
