@@ -40,6 +40,7 @@ class NeteaseIoTClient:
         self.mqtt_host = mqtt_config.get("host")
         self.mqtt_port = mqtt_config.get("port")
         self.keepalive = mqtt_config.get("keepalive", 60)
+        self.use_ssl = mqtt_config.get("use_ssl", False)  # 添加SSL选项
         
         # 状态管理
         self.connected = False
@@ -71,7 +72,7 @@ class NeteaseIoTClient:
         # MQTT客户端（将在连接时初始化）
         self.client = None
         
-    def _generate_mqtt_password(self, device_secret: str) -> str:
+    def _generate_mqtt_password(self) -> str:
         """生成MQTT连接密码（基于HMAC-SHA256的动态令牌）"""
         try:
             # 每5分钟同步一次时间
@@ -83,7 +84,7 @@ class NeteaseIoTClient:
             self.logger.debug(f"生成密码 - counter: {counter}, 时间戳: {timestamp}")
             
             counter_bytes = str(counter).encode('utf-8')
-            secret_bytes = device_secret.encode('utf-8')
+            secret_bytes = self.device_secret.encode('utf-8')
             hmac_obj = hmac.new(secret_bytes, counter_bytes, hashlib.sha256)
             token = hmac_obj.digest()[:10].hex().upper()
             password = f"v1:{token}"
@@ -105,35 +106,6 @@ class NeteaseIoTClient:
         except Exception as e:
             self.logger.warning(f"时间同步异常: {e}")
     
-    def _init_mqtt_client(self):
-        """初始化MQTT客户端，设置正确的认证信息"""
-        try:
-            # 网易IoT平台认证参数
-            client_id = self.device_name  # 使用设备名作为客户端ID
-            username = self.product_key   # 使用产品密钥作为用户名
-            password = self._generate_mqtt_password(self.device_secret)
-            
-            self.logger.info(f"初始化MQTT客户端 - ClientID: {client_id}, Username: {username}")
-            
-            self.client = mqtt.Client(
-                client_id=client_id,
-                clean_session=True,  # 网易IoT建议使用clean_session=True
-                protocol=mqtt.MQTTv311
-            )
-            self.client.username_pw_set(username=username, password=password)
-            
-            # 设置回调函数
-            self.client.on_connect = self._on_connect
-            self.client.on_message = self._on_message
-            self.client.on_disconnect = self._on_disconnect
-            self.client.on_publish = self._on_publish
-            self.client.on_subscribe = self._on_subscribe
-            
-            self.logger.info("MQTT客户端初始化完成")
-        except Exception as e:
-            self.logger.error(f"MQTT客户端初始化失败: {e}")
-            raise
-
     def set_ha_config(self, ha_config: Dict):
         """设置HA配置"""
         self.ha_config = ha_config
@@ -147,10 +119,16 @@ class NeteaseIoTClient:
             self.reconnect_delay = 1  # 重置重连延迟
             self.logger.info(f"MQTT连接成功: {self.device_id} (ClientID: {self.device_name})")
             
-            # 订阅控制主题
+            # 订阅控制主题（参考工作代码的订阅逻辑）
             client.subscribe(self.topic_control, qos=1)
             self.subscribed_topics.add(self.topic_control)
             self.logger.info(f"订阅控制Topic: {self.topic_control}")
+            
+            # 订阅子设备属性设置主题（如果是网关设备）
+            property_set_topic = f"thing/service/property/set"
+            client.subscribe(property_set_topic, qos=1)
+            self.subscribed_topics.add(property_set_topic)
+            self.logger.info(f"订阅属性设置Topic: {property_set_topic}")
             
             # 重连后同步状态（首次连接跳过）
             if self.sync_on_reconnect and (self.reconnect_count > 0 or self.cached_states or self.pending_states):
@@ -213,13 +191,26 @@ class NeteaseIoTClient:
             self.logger.info("MQTT连接正常关闭")
     
     def _schedule_reconnect(self):
-        """计划重连（指数退避策略）"""
+        """计划重连（非阻塞方式）"""
+        if self.reconnect_count >= self.max_reconnect or not self.enabled:
+            self.logger.error("达到最大重连次数或已禁用，停止重连")
+            return
+            
         if self.reconnect_delay < 60:
-            self.reconnect_delay *= 2  # 重连延迟翻倍（最大60秒）
-        self.logger.info(f"{self.reconnect_delay}秒后尝试重连...")
-        time.sleep(self.reconnect_delay)
-        if self.enabled and self.reconnect_count < self.max_reconnect:
-            self.connect()
+            self.reconnect_delay = min(self.reconnect_delay * 2, 60)  # 重连延迟翻倍，最大60秒
+        
+        self.logger.info(f"将在 {self.reconnect_delay} 秒后尝试重连（第{self.reconnect_count}次）")
+        
+        # 使用非阻塞方式延迟重连（将在后台线程中处理）
+        import threading
+        def delayed_reconnect():
+            time.sleep(self.reconnect_delay)
+            if self.enabled and self.reconnect_count < self.max_reconnect:
+                self.logger.info("开始重连...")
+                self.connect()
+        
+        reconnect_thread = threading.Thread(target=delayed_reconnect, daemon=True)
+        reconnect_thread.start()
 
     def _on_publish(self, client, userdata, mid):
         """发布回调"""
@@ -229,6 +220,17 @@ class NeteaseIoTClient:
     def _on_subscribe(self, client, userdata, mid, granted_qos):
         """订阅回调"""
         self.logger.debug(f"订阅成功，Mid: {mid}，QoS: {granted_qos}")
+
+    def _on_log(self, client, userdata, level, buf):
+        """MQTT日志回调（用于调试）"""
+        if level == mqtt.MQTT_LOG_ERR:
+            self.logger.error(f"MQTT错误: {buf}")
+        elif level == mqtt.MQTT_LOG_WARNING:
+            self.logger.warning(f"MQTT警告: {buf}")
+        elif level == mqtt.MQTT_LOG_INFO:
+            self.logger.info(f"MQTT信息: {buf}")
+        else:
+            self.logger.debug(f"MQTT调试: {buf}")
 
     def _publish(self, data: Dict, topic: str):
         """安全发布消息"""
@@ -293,6 +295,31 @@ class NeteaseIoTClient:
         }
         return param_map.get(param)
 
+    def _init_mqtt_client(self):
+        """初始化MQTT客户端，设置认证信息和回调函数"""
+        try:
+            client_id = self.device_name
+            username = self.product_key
+            password = self._generate_mqtt_password()
+            
+            self.client = mqtt.Client(client_id=client_id, clean_session=True, protocol=mqtt.MQTTv311)
+            self.client.username_pw_set(username=username, password=password)
+            
+            if self.use_ssl:
+                self.client.tls_set()
+                self.logger.info("已启用SSL加密连接")
+            
+            self.client.on_connect = self._on_connect
+            self.client.on_disconnect = self._on_disconnect
+            self.client.on_message = self._on_message
+            self.client.on_publish = self._on_publish
+            self.client.on_subscribe = self._on_subscribe
+            self.client.on_log = self._on_log
+            self.logger.info("MQTT客户端初始化完成")
+        except Exception as e:
+            self.logger.error(f"MQTT客户端初始化失败: {e}")
+            raise
+
     def connect(self) -> bool:
         """连接到MQTT服务器"""
         if not self.enabled:
@@ -301,8 +328,10 @@ class NeteaseIoTClient:
             
         self._init_mqtt_client()
         try:
-            self.logger.info(f"连接MQTT服务器: {self.mqtt_host}:{self.mqtt_port}")
-            self.client.connect(self.mqtt_host, self.mqtt_port, keepalive=self.keepalive)
+            # 根据SSL配置选择端口 - 参考工作代码的逻辑
+            port = 8883 if self.use_ssl else self.mqtt_port
+            self.logger.info(f"连接MQTT服务器: {self.mqtt_host}:{port} (SSL: {self.use_ssl})")
+            self.client.connect(self.mqtt_host, port, keepalive=60)
             self.client.loop_start()  # 启动网络循环线程
             
             # 等待连接成功（超时10秒）
