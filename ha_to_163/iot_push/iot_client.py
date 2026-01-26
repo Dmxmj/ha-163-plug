@@ -86,7 +86,8 @@ class NeteaseIoTClient:
             counter_bytes = str(counter).encode('utf-8')
             secret_bytes = self.device_secret.encode('utf-8')
             hmac_obj = hmac.new(secret_bytes, counter_bytes, hashlib.sha256)
-            token = hmac_obj.digest()[:10].hex().upper()
+            # 修复：与bash脚本保持一致 - 获取完整hex然后取前20个字符，保持小写
+            token = hmac_obj.hexdigest()[:20]  # 前20个字符，保持小写
             password = f"v1:{token}"
             self.logger.info(f"生成的MQTT密码: {password}")
             return password
