@@ -50,6 +50,13 @@ class NeteaseIoTClient:
         self.enabled = device_config.get("enabled", True)
         self.reconnect_delay = 1
         
+        # 状态缓存和同步管理
+        self.cached_states = {}  # 缓存最后的实体状态
+        self.pending_states = {}  # 待推送的状态变化
+        self.last_sync_time = 0  # 上次同步时间
+        self.sync_on_reconnect = True  # 重连时是否同步状态
+        self.subscribed_topics = set()  # 已订阅的主题集合
+        
         # Topic配置（动态生成）
         self.topic_control = f"sys/{self.product_key}/{self.device_name}/service/CommonService"
         self.topic_control_reply = f"sys/{self.product_key}/{self.device_name}/service/CommonService_reply"
@@ -142,7 +149,12 @@ class NeteaseIoTClient:
             
             # 订阅控制主题
             client.subscribe(self.topic_control, qos=1)
+            self.subscribed_topics.add(self.topic_control)
             self.logger.info(f"订阅控制Topic: {self.topic_control}")
+            
+            # 重连后同步状态（首次连接跳过）
+            if self.sync_on_reconnect and (self.reconnect_count > 0 or self.cached_states or self.pending_states):
+                self._sync_all_states_on_reconnect()
         else:
             self.connected = False
             self.reconnect_count += 1
@@ -323,8 +335,14 @@ class NeteaseIoTClient:
             self.logger.info("MQTT连接已断开")
 
     def push_property(self, ha_data: Dict):
-        """推送属性数据"""
+        """推送属性数据（支持断线时缓存状态）"""
+        # 缓存最新的HA实体状态
+        self._cache_states(ha_data)
+        
         if not self.connected or not self.enabled:
+            # 如果未连接，将状态加入待推送队列
+            self.pending_states.update(ha_data)
+            self.logger.warning(f"MQTT未连接，状态已加入待推送队列: {ha_data}")
             return
         
         payload = {
@@ -357,6 +375,137 @@ class NeteaseIoTClient:
             if iot_key and value is not None:
                 converted[iot_key] = value
         return converted
+
+    def _cache_states(self, ha_data: Dict):
+        """缓存HA实体状态"""
+        try:
+            self.cached_states.update(ha_data)
+            self.last_sync_time = time.time()
+            self.logger.debug(f"状态已缓存: {ha_data}")
+        except Exception as e:
+            self.logger.error(f"缓存状态失败: {e}")
+
+    def _sync_all_states_on_reconnect(self):
+        """重连后同步所有状态"""
+        try:
+            # 合并缓存状态和待推送状态
+            all_states = {**self.cached_states, **self.pending_states}
+            
+            if not all_states:
+                self.logger.info("重连后无状态需要同步")
+                return
+            
+            self.logger.info(f"重连后同步状态: {len(all_states)} 个实体")
+            
+            # 推送所有状态
+            if all_states:
+                payload = {
+                    "id": str(int(time.time()*1000)),
+                    "params": self._convert_ha_data(all_states)
+                }
+                self._publish(payload, self.topic_property_post)
+                self.logger.info(f"重连后状态同步完成: {payload}")
+                
+                # 清空待推送队列
+                self.pending_states.clear()
+            
+        except Exception as e:
+            self.logger.error(f"重连后状态同步失败: {e}")
+
+    def _fetch_current_ha_states(self) -> Dict:
+        """从HA API获取当前所有相关实体的状态"""
+        ha_url = self.ha_config.get("ha_url")
+        ha_headers = self.ha_config.get("ha_headers")
+        
+        if not ha_url or not ha_headers:
+            self.logger.warning("HA配置不完整，无法获取当前状态")
+            return {}
+        
+        try:
+            ha_api_url = ha_url if ha_url.endswith("/") else f"{ha_url}/"
+            current_states = {}
+            
+            # 定义需要同步的实体映射
+            entity_map = {
+                f"switch.{self.entity_prefix}_on_p_2_1": "all_switch",
+                f"switch.{self.entity_prefix}_on_p_7_1": "jack_1", 
+                f"switch.{self.entity_prefix}_on_p_8_1": "jack_2",
+                f"switch.{self.entity_prefix}_on_p_9_1": "jack_3",
+                f"switch.{self.entity_prefix}_on_p_10_1": "jack_4",
+                f"switch.{self.entity_prefix}_on_p_11_1": "jack_5",
+                f"switch.{self.entity_prefix}_on_p_12_1": "jack_6",
+                f"select.{self.entity_prefix}_default_power_on_state_p_2_2": "default_power_on_state",
+                f"sensor.{self.entity_prefix}_electric_power_p_2_6": "electric_power",
+                f"sensor.{self.entity_prefix}_electric_current_p_2_7": "electric_current",
+                f"sensor.{self.entity_prefix}_voltage_p_2_8": "voltage",
+                f"sensor.{self.entity_prefix}_power_consumption_p_2_9": "power_consumption"
+            }
+            
+            # 获取每个实体的状态
+            for entity_id, ha_key in entity_map.items():
+                try:
+                    resp = requests.get(
+                        f"{ha_api_url}states/{entity_id}",
+                        headers=ha_headers,
+                        timeout=5,
+                        verify=False
+                    )
+                    if resp.status_code == 200:
+                        state_data = resp.json()
+                        state_value = state_data.get("state")
+                        
+                        # 转换状态值
+                        if ha_key in ["all_switch", "jack_1", "jack_2", "jack_3", "jack_4", "jack_5", "jack_6"]:
+                            current_states[ha_key] = 1 if state_value == "on" else 0
+                        elif ha_key == "default_power_on_state":
+                            state_map = {"off": 0, "on": 1, "memory": 2}
+                            current_states[ha_key] = state_map.get(state_value, 0)
+                        else:
+                            # 数值类型传感器
+                            try:
+                                current_states[ha_key] = float(state_value)
+                            except (ValueError, TypeError):
+                                self.logger.warning(f"实体 {entity_id} 状态值无法转换为数值: {state_value}")
+                                
+                except requests.exceptions.RequestException as e:
+                    self.logger.warning(f"获取实体 {entity_id} 状态失败: {e}")
+                except Exception as e:
+                    self.logger.error(f"处理实体 {entity_id} 状态时出错: {e}")
+            
+            self.logger.info(f"从HA获取到 {len(current_states)} 个实体状态")
+            return current_states
+            
+        except Exception as e:
+            self.logger.error(f"获取HA当前状态失败: {e}")
+            return {}
+
+    def force_sync_all_states(self):
+        """强制同步所有当前状态（用于手动触发）"""
+        if not self.connected or not self.enabled:
+            self.logger.warning("MQTT未连接，无法强制同步状态")
+            return False
+        
+        try:
+            # 获取当前HA状态
+            current_states = self._fetch_current_ha_states()
+            if not current_states:
+                self.logger.warning("无法获取到当前HA状态，强制同步取消")
+                return False
+            
+            # 缓存并推送状态
+            self._cache_states(current_states)
+            
+            payload = {
+                "id": str(int(time.time()*1000)),
+                "params": self._convert_ha_data(current_states)
+            }
+            self._publish(payload, self.topic_property_post)
+            self.logger.info(f"强制同步状态完成: {len(current_states)} 个实体")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"强制同步状态失败: {e}")
+            return False
 
     def update_config(self, new_config: Dict):
         """动态更新设备配置"""
