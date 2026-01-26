@@ -294,7 +294,7 @@ if __name__ == "__main__":
     try:
         import subprocess
         import os
-        # 运行简单连接测试
+        # 运行简单连接测试 - 使用正确的根目录路径
         script_path = os.path.join(os.path.dirname(__file__), "simple_mqtt_test.py")
         result = subprocess.run([sys.executable, script_path], 
                               capture_output=True, text=True, timeout=30)
