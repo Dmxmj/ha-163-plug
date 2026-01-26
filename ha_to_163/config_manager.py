@@ -57,7 +57,7 @@ class ConfigManager:
     def _load_from_options_file(self) -> Dict:
         """从options.json文件加载配置（备用方案）"""
         # 尝试多个可能的配置文件路径
-        options_paths = ["/data/options.json", "/config/options.json", "options.json", "/app/options.json"]
+        options_paths = ["/data/options.json", "/config/options.json", "options.json"]
         
         for options_path in options_paths:
             try:
