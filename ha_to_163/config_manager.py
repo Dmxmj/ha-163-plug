@@ -57,7 +57,7 @@ class ConfigManager:
     def _load_from_options_file(self) -> Dict:
         """从options.json文件加载配置（备用方案）"""
         # 尝试多个可能的配置文件路径
-        options_paths = ["/data/options.json", "/config/options.json", "/app/options.json"]
+        options_paths = ["/data/options.json", "/config/options.json", "options.json", "/app/options.json"]
         
         for options_path in options_paths:
             try:
@@ -66,7 +66,7 @@ class ConfigManager:
                     with open(options_path, "r", encoding="utf-8") as f:
                         options = json.load(f)
                     config = {
-                        "ha_url": options.get("ha_url", "http://supervisor/core/api"),
+                        "ha_url": options.get("ha_url", "http://10.222.36.124:8123/api"),
                         "ha_token": options.get("ha_token", ""),
                         "gateway_triple": options.get("gateway_triple", {}),
                         "devices_triple": options.get("devices_triple", []),
@@ -214,7 +214,7 @@ class ConfigManager:
     def get_default_config(self) -> Dict:
         """获取默认配置"""
         return {
-            "ha_url": "http://supervisor/core/api",
+            "ha_url": "http://10.222.36.124:8123/api",
             "ha_token": "",
             "gateway_triple": {
                 "product_key": "y8qxef45aaeuly4",
