@@ -1,5 +1,0 @@
-#!/usr/bin/with-contenv bashio
-bashio::log.info "=== 163 Gateway 服务正在停止 ==="
-# 这里可以添加服务停止前的清理逻辑（如关闭MQTT连接、保存数据等）
-exit 0
-chmod +x finish
