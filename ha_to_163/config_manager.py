@@ -226,7 +226,7 @@ class ConfigManager:
             "ha_url": "http://10.222.36.124:8123/api",
             "ha_token": "",
             "gateway_triple": {
-                "product_key": "y8qxef45aaeuly4",
+                "product_key": "dq3bNV5RxI2ONfK",
                 "device_name": "gateway_default",
                 "device_secret": ""
             },
