@@ -250,11 +250,16 @@ class GatewayManager:
                         sensors = device_info.get("sensors", {})
                         logger.info(f"设备{device_id}可用传感器: {list(sensors.keys())}")
                         
+                        # 调试：显示完整的device_info结构
+                        logger.debug(f"设备{device_id}完整信息: {device_info}")
+                        
                         for prop_name, entity_id in sensors.items():
                             value = self.discovery.read_entity_value_safe(entity_id)
                             if value is not None:
                                 ha_data[prop_name] = value
-                                logger.debug(f"设备{device_id} {prop_name}: {value}")
+                                logger.info(f"设备{device_id} {prop_name}({entity_id}): {value}")
+                            else:
+                                logger.warning(f"设备{device_id} {prop_name}({entity_id}): 读取失败或值为空")
                         
                         # 推送子设备数据到网易IoT平台
                         if ha_data:
