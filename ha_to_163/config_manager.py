@@ -56,36 +56,51 @@ class ConfigManager:
     
     def _load_from_options_file(self) -> Dict:
         """从options.json文件加载配置（备用方案）"""
-        options_path = "/data/options.json"
-        try:
-            if os.path.exists(options_path):
-                with open(options_path, "r", encoding="utf-8") as f:
-                    options = json.load(f)
-                config = {
-                    "ha_url": options.get("ha_url", "http://supervisor/core/api"),
-                    "ha_token": options.get("ha_token", ""),
-                    "gateway_triple": options.get("gateway_triple", {}),
-                    "devices_triple": options.get("devices_triple", []),
-                    "mqtt_config": {
-                        "host": options.get("mqtt_host", "device.iot.163.com"),
-                        "port": int(options.get("mqtt_port", 1883)),
-                        "keepalive": 60
-                    },
-                    "report_interval": int(options.get("report_interval", 60)),
-                    "discovery_retry_interval": int(options.get("discovery_retry_interval", 300)),
-                    "retry_attempts": int(options.get("retry_attempts", 5)),
-                    "retry_delay": int(options.get("retry_delay", 3))
-                }
-                self.config = config
-                self.save_config()
-                logger.info("配置从options.json加载成功")
-                return config
-        except Exception as e:
-            logger.error(f"从options.json加载配置失败: {str(e)}")
+        # 尝试多个可能的配置文件路径
+        options_paths = ["/data/options.json", "/config/options.json", "/app/options.json"]
         
-        # 如果options.json也不存在，返回默认配置
-        logger.warning("使用默认配置")
-        return self.get_default_config()
+        for options_path in options_paths:
+            try:
+                if os.path.exists(options_path):
+                    logger.info(f"找到配置文件: {options_path}")
+                    with open(options_path, "r", encoding="utf-8") as f:
+                        options = json.load(f)
+                    config = {
+                        "ha_url": options.get("ha_url", "http://supervisor/core/api"),
+                        "ha_token": options.get("ha_token", ""),
+                        "gateway_triple": options.get("gateway_triple", {}),
+                        "devices_triple": options.get("devices_triple", []),
+                        "mqtt_config": {
+                            "host": options.get("mqtt_host", "device.iot.163.com"),
+                            "port": int(options.get("mqtt_port", 1883)),
+                            "keepalive": 60
+                        },
+                        "report_interval": int(options.get("report_interval", 60)),
+                        "discovery_retry_interval": int(options.get("discovery_retry_interval", 300)),
+                        "retry_attempts": int(options.get("retry_attempts", 5)),
+                        "retry_delay": int(options.get("retry_delay", 3))
+                    }
+                    self.config = config
+                    self.save_config()
+                    logger.info("配置从options.json加载成功")
+                    return config
+            except Exception as e:
+                logger.error(f"从{options_path}加载配置失败: {str(e)}")
+                continue
+        
+        # 尝试从环境变量加载基本配置
+        logger.warning("未找到配置文件，尝试从环境变量加载")
+        config = self.get_default_config()
+        
+        # 从环境变量覆盖配置
+        if os.environ.get("HA_TOKEN"):
+            config["ha_token"] = os.environ.get("HA_TOKEN")
+        if os.environ.get("DEVICE_SECRET"):
+            config["gateway_triple"]["device_secret"] = os.environ.get("DEVICE_SECRET")
+            
+        self.config = config
+        logger.warning("使用默认配置（请在 Add-on 配置中填写必要信息）")
+        return config
 
     def load_saved_config(self) -> Dict:
         """加载本地保存的配置"""
