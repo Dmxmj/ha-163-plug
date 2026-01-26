@@ -289,6 +289,23 @@ class GatewayManager:
 
 # 入口函数
 if __name__ == "__main__":
+    # 预先验证MQTT连接配置
+    logger.info("=== 开始预连接验证 ===")
+    try:
+        import subprocess
+        import os
+        # 运行简单连接测试
+        script_path = os.path.join(os.path.dirname(__file__), "simple_mqtt_test.py")
+        result = subprocess.run([sys.executable, script_path], 
+                              capture_output=True, text=True, timeout=30)
+        if result.returncode == 0:
+            logger.info("✅ MQTT预连接验证成功")
+        else:
+            logger.error(f"❌ MQTT预连接验证失败: {result.stderr}")
+            logger.info("继续启动主程序，但可能存在连接问题...")
+    except Exception as e:
+        logger.warning(f"预连接验证异常，跳过: {e}")
+    
     # 创建网关实例
     gateway = GatewayManager()
     
