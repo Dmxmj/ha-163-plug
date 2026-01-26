@@ -76,11 +76,16 @@ class GatewayManager:
         # 6. 初始化动态发现状态
         self._initialize_dynamic_discovery()
         
-        # 7. 初始化状态变化监听器
-        self._initialize_state_monitor()
-        
-        # 8. 标记运行状态
+        # 7. 标记运行状态（先标记运行状态）
         self.running = True
+        
+        # 8. 延迟初始化状态变化监听器（等待HA实体完全就绪）
+        delay_thread = threading.Thread(
+            target=self._delayed_state_monitor_init,
+            name="DelayedStateMonitorInit",
+            daemon=True
+        )
+        delay_thread.start()
         logger.info("=== 网关初始化完成 ===")
         return True
 
@@ -505,6 +510,22 @@ class GatewayManager:
         
         self.last_config_check = int(time.time())
         logger.info(f"动态发现初始化完成，活跃设备数: {len(self.active_device_configs)}")
+
+    def _delayed_state_monitor_init(self):
+        """延迟初始化状态监听器（等待HA实体完全就绪）"""
+        try:
+            logger.info("⏳ 等待30秒，确保HA实体完全就绪...")
+            time.sleep(30)  # 等待30秒，让HA实体完全初始化
+            
+            if not self.running:
+                logger.info("网关已停止，取消状态监听器初始化")
+                return
+            
+            logger.info("🚀 开始延迟初始化状态变化监听器...")
+            self._initialize_state_monitor()
+            
+        except Exception as e:
+            logger.error(f"延迟状态监听器初始化失败: {e}")
 
     def _on_state_change(self, entity_id, old_value, new_value):
         """状态变化回调 - 当本地设备状态改变时立即推送到云端"""
