@@ -65,6 +65,12 @@ class GatewayManager:
             "Authorization": f"Bearer {self.config['ha_token']}",
             "Content-Type": "application/json"
         }
+        # 添加调试信息
+        logger.info(f"🔧 HA配置调试信息:")
+        logger.info(f"  ha_url: {self.config.get('ha_url')}")
+        logger.info(f"  ha_token: {self.config.get('ha_token', '')[:20]}...")
+        logger.info(f"  ha_headers: {ha_headers}")
+        
         self.discovery = HADiscovery(self.config, ha_headers)
         
         # 4. 初始化所有启用设备的IoT客户端
