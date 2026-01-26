@@ -129,7 +129,13 @@ class GatewayManager:
             logger.info(f"DeviceName: {gateway_config['device_name']}")
             
             # 创建网关IoT客户端（单一连接）
-            gateway_client = NeteaseIoTClient(gateway_config, mqtt_config)
+            # 为网关配置添加必需的字段
+            gateway_config_with_id = gateway_config.copy()
+            gateway_config_with_id["device_id"] = "gateway"
+            gateway_config_with_id["entity_prefix"] = "gateway"  # 添加默认entity_prefix
+            gateway_config_with_id["enabled"] = True  # 网关默认启用
+            
+            gateway_client = NeteaseIoTClient(gateway_config_with_id, mqtt_config)
             
             # 设置HA配置（用于命令同步）
             gateway_client.set_ha_config({
