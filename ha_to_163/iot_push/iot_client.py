@@ -439,37 +439,57 @@ class NeteaseIoTClient:
         return self._map_param_to_entity_with_prefix(param, self.entity_prefix)
 
     def _map_param_to_entity_with_prefix(self, param: str, entity_prefix: str) -> Optional[str]:
-        """映射IoT参数到HA实体ID（动态查询HA实体，参考工作代码的逻辑）"""
-        # 参数到实体类型的映射
-        param_to_domain = {
-            "state0": "switch",    # 开关类型
-            "state1": "switch", 
-            "state2": "switch",
-            "state3": "switch", 
-            "state4": "switch",
-            "state5": "switch",
-            "state6": "switch",
-            "default": "select"    # 选择器类型
+        """映射IoT参数到HA实体ID（优先使用发现阶段的缓存数据）"""
+        
+        # 1. 首先尝试从发现模块的缓存中查找
+        if self.discovery:
+            discovered_devices = self.discovery.get_discovered_devices()
+            for device_id, device_info in discovered_devices.items():
+                # 检查是否是目标设备（通过entity_prefix匹配）
+                device_prefix = device_info.get('config', {}).get('entity_prefix', '')
+                if device_prefix == entity_prefix:
+                    # 从sensors映射中查找对应的实体
+                    sensors = device_info.get('sensors', {})
+                    if param in sensors:
+                        entity_id = sensors[param]
+                        self.logger.info(f"✅ 从发现缓存获取实体: {param} → {entity_id}")
+                        return entity_id
+        
+        # 2. 如果缓存中没有，则使用动态查询（兜底方案）
+        self.logger.warning(f"缓存中未找到{param}，尝试动态查询...")
+        
+        # 参数到实体特征后缀的映射（基于发现时的规律）
+        param_to_suffix = {
+            "state0": "on_p_2_1",
+            "state1": "on_p_7_1", 
+            "state2": "on_p_8_1",
+            "state3": "on_p_9_1", 
+            "state4": "on_p_10_1",
+            "state5": "on_p_11_1",
+            "state6": "on_p_12_1",
+            "default": "default_power_on_state_p_2_2"
         }
         
-        target_domain = param_to_domain.get(param)
-        if not target_domain:
+        param_to_domain = {
+            "state0": "switch", "state1": "switch", "state2": "switch",
+            "state3": "switch", "state4": "switch", "state5": "switch", 
+            "state6": "switch", "default": "select"
+        }
+        
+        suffix = param_to_suffix.get(param)
+        domain = param_to_domain.get(param)
+        if not suffix or not domain:
             self.logger.warning(f"参数{param}不支持控制")
             return None
         
-        # 动态查询HA实体（参考工作代码的实现）
+        # 动态查询HA实体
         ha_url = self.ha_config.get("ha_url")
         ha_headers = self.ha_config.get("ha_headers")
         if not ha_url or not ha_headers:
-            self.logger.error("HA配置不完整，无法动态查询实体")
-            self.logger.error(f"ha_url: {ha_url}, ha_headers: {ha_headers}")
+            self.logger.error("HA配置不完整，无法查询实体")
             return None
         
         try:
-            # 添加调试信息
-            self.logger.debug(f"查询HA API: {ha_url}/api/states")
-            self.logger.debug(f"请求头: {ha_headers}")
-            
             # 查询HA中的所有实体
             resp = requests.get(
                 f"{ha_url}/api/states",
@@ -483,38 +503,25 @@ class NeteaseIoTClient:
                 return None
 
             entities = resp.json()
-            # 筛选符合前缀且类型匹配的实体（参考工作代码逻辑）
-            candidate_entities = [
-                e["entity_id"] for e in entities
-                if entity_prefix in e["entity_id"] 
-                and e["entity_id"].startswith(f"{target_domain}.")
-            ]
-
-            if candidate_entities:
-                matched_entity = candidate_entities[0]  # 取第一个匹配的
-                self.logger.info(f"✅ 动态匹配到控制实体: {param} → {matched_entity}")
-                return matched_entity
-            else:
-                self.logger.error(f"未找到前缀为'{entity_prefix}'的{target_domain}类型实体")
-                # 降级到硬编码映射作为兜底
-                fallback_map = {
-                    "state0": f"switch.{entity_prefix}_on_p_2_1",
-                    "state1": f"switch.{entity_prefix}_on_p_7_1",
-                    "state2": f"switch.{entity_prefix}_on_p_8_1",
-                    "state3": f"switch.{entity_prefix}_on_p_9_1",
-                    "state4": f"switch.{entity_prefix}_on_p_10_1",
-                    "state5": f"switch.{entity_prefix}_on_p_11_1",
-                    "state6": f"switch.{entity_prefix}_on_p_12_1",
-                    "default": f"select.{entity_prefix}_default_power_on_state_p_2_2"
-                }
-                fallback_entity = fallback_map.get(param)
-                if fallback_entity:
-                    self.logger.info(f"🔄 使用硬编码兜底映射: {param} → {fallback_entity}")
-                return fallback_entity
+            # 精确匹配：同时满足domain、entity_prefix、suffix
+            for entity in entities:
+                entity_id = entity["entity_id"]
+                if (entity_id.startswith(f"{domain}.") and 
+                    entity_prefix in entity_id and 
+                    entity_id.endswith(suffix)):
+                    self.logger.info(f"✅ 动态查询匹配: {param} → {entity_id}")
+                    return entity_id
+            
+            # 如果精确匹配失败，使用硬编码兜底
+            fallback_entity = f"{domain}.{entity_prefix}_{suffix}"
+            self.logger.warning(f"⚠️ 动态查询失败，使用兜底映射: {param} → {fallback_entity}")
+            return fallback_entity
 
         except Exception as e:
             self.logger.error(f"动态查询实体异常: {e}")
-            return None
+            # 异常情况下的硬编码兜底
+            fallback_entity = f"{param_to_domain[param]}.{entity_prefix}_{param_to_suffix[param]}"
+            return fallback_entity
 
     def _init_mqtt_client(self):
         """初始化MQTT客户端，设置认证信息和回调函数"""
