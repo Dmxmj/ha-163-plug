@@ -264,7 +264,9 @@ class GatewayManager:
                                 logger.info(f"sensors数量: {len(sensors) if isinstance(sensors, dict) else 'N/A'}")
                             
                             # 情况2：数据被拍平了（device_info直接就是传感器映射）
-                            elif all(isinstance(v, str) and ('sensor.' in v or 'switch.' in v or 'select.' in v) for v in device_info.values() if isinstance(v, str)):
+                            elif all(isinstance(v, str) and any(entity_type in v for entity_type in ['sensor.', 'switch.', 'select.', 'binary_sensor.', 'number.', 'text.']) 
+                                     for k, v in device_info.items() 
+                                     if isinstance(v, str) and k not in ['device_id', 'config', 'sensors']):
                                 logger.warning("⚠️ 检测到数据结构被拍平，正在修复...")
                                 sensors = device_info  # device_info本身就是传感器映射
                                 logger.info(f"修复后sensors数量: {len(sensors)}")
