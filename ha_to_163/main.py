@@ -234,6 +234,10 @@ class GatewayManager:
 
     def _push_data_loop(self):
         """数据推送循环（核心业务逻辑）"""
+        logger.info("🚀 数据推送循环启动")
+        consecutive_errors = 0  # 连续错误计数
+        max_consecutive_errors = 5  # 最大连续错误次数
+        
         while self.running:
             try:
                 # 1. 检查网关连接状态
@@ -334,13 +338,31 @@ class GatewayManager:
                         logger.error(f"子设备{device_id}推送异常（已跳过）: {str(e)}")
                         continue
                 
-                # 5. 等待推送间隔（固定60秒）
+                # 5. 推送成功，重置错误计数
+                consecutive_errors = 0
+                # 等待推送间隔（固定60秒）
                 time.sleep(self.config["report_interval"])
             
             except Exception as e:
                 # 推送循环异常，记录并短暂等待后恢复
-                logger.error(f"推送循环全局异常: {str(e)}", exc_info=True)
-                time.sleep(10)
+                consecutive_errors += 1
+                logger.error(f"推送循环全局异常 ({consecutive_errors}/{max_consecutive_errors}): {str(e)}", exc_info=True)
+                
+                # 如果连续错误次数过多，尝试重新初始化网关连接
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.warning(f"推送循环连续失败 {max_consecutive_errors} 次，尝试重新初始化网关连接")
+                    try:
+                        with self.lock:
+                            self._init_iot_clients()  # 重新初始化网关连接
+                        consecutive_errors = 0  # 重置错误计数
+                        logger.info("网关连接重新初始化完成")
+                    except Exception as init_e:
+                        logger.error(f"重新初始化网关连接失败: {str(init_e)}")
+                
+                # 等待更长时间后重试
+                wait_time = min(10 + consecutive_errors * 5, 60)  # 递增等待时间，最大60秒
+                logger.info(f"推送循环将在 {wait_time} 秒后重试")
+                time.sleep(wait_time)
 
     def _discovery_retry_loop(self):
         """设备发现重试循环（自动恢复离线设备）"""
@@ -429,25 +451,32 @@ class GatewayManager:
         import json
         
         try:
-            # 1. 重新加载配置（从文件或环境变量）
+            # 1. 首先检查配置文件是否有变化，避免不必要的重载
+            if not self.config_manager.has_config_changed(self.last_config_check):
+                # 配置文件无变化，跳过此次检查
+                logger.debug("配置文件无变化，跳过动态发现检查")
+                return
+            
+            # 2. 重新加载配置（从文件或环境变量）
             current_config = self.config_manager.load_from_env()
             if not current_config:
                 logger.warning("动态发现：无法重新加载配置")
                 return
             
-            # 2. 计算当前设备配置的哈希值
+            # 3. 计算当前设备配置的哈希值
             current_device_configs = current_config.get("devices_triple", [])
             current_config_json = json.dumps(current_device_configs, sort_keys=True)
             current_config_hash = hashlib.md5(current_config_json.encode()).hexdigest()
             
-            # 3. 检查配置是否有变化
+            # 4. 检查配置是否有变化
             if self.last_config_hash and self.last_config_hash == current_config_hash:
                 # 配置无变化，跳过此次检查
+                logger.debug("设备配置哈希值无变化，跳过动态发现")
                 return
             
             logger.info("=== 检测到设备配置变化，开始动态发现 ===")
             
-            # 4. 识别新增设备
+            # 5. 识别新增设备
             current_device_ids = {d["device_id"] for d in current_device_configs if d.get("enabled", False)}
             active_device_ids = set(self.active_device_configs.keys())
             
@@ -457,7 +486,7 @@ class GatewayManager:
             if new_device_ids:
                 logger.info(f"发现新增设备: {list(new_device_ids)}")
                 
-                # 5. 为新增设备执行实体发现
+                # 6. 为新增设备执行实体发现
                 new_device_configs = [d for d in current_device_configs 
                                     if d["device_id"] in new_device_ids and d.get("enabled", False)]
                 
@@ -492,9 +521,9 @@ class GatewayManager:
                     self.active_device_configs.pop(device_id, None)
                     # 注意：不需要断开IoT连接，因为使用的是网关模式单一连接
                 
-            # 6. 更新配置哈希值
-            self.last_config_hash = current_config_hash
-            self.last_config_check = int(time.time())
+                # 7. 更新配置哈希值
+                self.last_config_hash = current_config_hash
+                self.last_config_check = int(time.time())
             
             logger.info(f"动态发现完成，当前活跃设备数: {len(self.active_device_configs)}")
                 
