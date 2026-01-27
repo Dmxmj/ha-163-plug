@@ -19,19 +19,15 @@ PROPERTY_MAPPING = {
     "on_p_11_1": "state5",     # 插口5 → state5
     "on_p_12_1": "state6",     # 插口6 → state6
     "default_power_on_state_p_2_2": "default",
-    "electric_power_p_2_6": "active_power",
-    "electric_power_p_": "active_power",  # 新格式
-    "electric_current_p_": "current", 
-    "electric_current_p_3_4": "current",     # 新格式
-    "voltage_p_": "voltage",
-    "power_consumption_p_": "energy",
-    "power_consumption": "energy",     # 新格式 - 你的实体使用的格式
     "power_consumption_accumulation_way_p_3_3": "power_consumption_accumulation_way",
     "indicator_light_p_2_4": "indicator_light",
-    # 数值传感器
-    "power": "active_power",
-    "current": "current",
-    "energy": "energy"
+}
+# 前缀匹配（传感器类，只匹配前缀部分）
+PREFIX_MAPPING = {
+    "electric_power_": "active_power",    # 匹配 electric_power_p_2_6, electric_power_p_3_2 等
+    "electric_current_": "current",       # 匹配 electric_current_p_2_7, electric_current_p_3_4 等
+    "voltage_": "voltage",                # 匹配 voltage_p_2_8, voltage_p_3_5 等
+    "power_consumption_": "energy",       # 匹配 power_consumption_p_2_9, power_consumption_p_3_1 等
 }
 
 class HADiscovery(BaseDiscovery):
