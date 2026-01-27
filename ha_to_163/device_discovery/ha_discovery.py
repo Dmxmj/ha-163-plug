@@ -20,9 +20,12 @@ PROPERTY_MAPPING = {
     "on_p_12_1": "state6",     # 插口6 → state6
     "default_power_on_state_p_2_2": "default",
     "electric_power_p_2_6": "active_power",
+    "electric_power_p_3_2": "active_power",  # 新格式
     "electric_current_p_2_7": "current", 
+    "electric_current_p_3_4": "current",     # 新格式
     "voltage_p_2_8": "voltage",
-    "power_consumption_p_2_9": "energy",
+    "power_consumption_p_": "energy",
+    "power_consumption": "energy",     # 新格式 - 你的实体使用的格式
     "power_consumption_accumulation_way_p_3_3": "power_consumption_accumulation_way",
     "indicator_light_p_2_4": "indicator_light",
     # 数值传感器
