@@ -51,6 +51,11 @@ class NeteaseIoTClient:
         self.enabled = device_config.get("enabled", True)
         self.reconnect_delay = 1
         
+        # 自动重启机制
+        self.failed_reconnect_count = 0  # 累计失败重连次数
+        self.max_failed_reconnects = 10  # 最大失败重连次数，超过则重启程序
+        self.restart_callback = None  # 程序重启回调函数
+        
         # 状态缓存和同步管理
         self.cached_states = {}  # 缓存最后的实体状态
         self.pending_states = {}  # 待推送的状态变化
@@ -254,9 +259,18 @@ class NeteaseIoTClient:
             self.logger.info("MQTT连接正常关闭")
     
     def _schedule_reconnect(self):
-        """计划重连（非阻塞方式）"""
+        """计划重连（非阻塞方式，增加自动重启机制）"""
         if self.reconnect_count >= self.max_reconnect or not self.enabled:
-            self.logger.error("达到最大重连次数或已禁用，停止重连")
+            self.failed_reconnect_count += 1
+            self.logger.error(f"达到最大重连次数或已禁用，累计失败次数: {self.failed_reconnect_count}/{self.max_failed_reconnects}")
+            
+            # 检查是否需要自动重启程序
+            if self.failed_reconnect_count >= self.max_failed_reconnects:
+                self.logger.critical(f"MQTT重连失败次数达到 {self.max_failed_reconnects} 次，触发程序自动重启")
+                if self.restart_callback:
+                    self.restart_callback()
+                else:
+                    self.logger.error("未设置重启回调函数，无法自动重启程序")
             return
             
         if self.reconnect_delay < 60:
@@ -277,9 +291,18 @@ class NeteaseIoTClient:
                         self.client.disconnect()
                         self.client = None
                     
-                    self.connect()  # 完全重新连接
+                    success = self.connect()  # 完全重新连接
+                    if success:
+                        # 重连成功，重置失败计数器
+                        self.failed_reconnect_count = 0
+                        self.logger.info("✅ MQTT重连成功，重置失败计数器")
+                    else:
+                        self.failed_reconnect_count += 1
+                        self.logger.warning(f"MQTT重连失败，累计失败次数: {self.failed_reconnect_count}")
+                        
                 except Exception as e:
-                    self.logger.error(f"重连异常: {e}")
+                    self.failed_reconnect_count += 1
+                    self.logger.error(f"重连异常: {e}，累计失败次数: {self.failed_reconnect_count}")
         
         reconnect_thread = threading.Thread(target=delayed_reconnect, daemon=True)
         reconnect_thread.start()
