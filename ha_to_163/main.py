@@ -188,6 +188,10 @@ class GatewayManager:
             
             # ✅ 新增：设置设备发现模块引用，用于获取实体映射
             gateway_client.discovery = self.discovery
+            
+            # ✅ 新增：设置自动重启回调函数
+            gateway_client.restart_callback = self._restart_program
+            
             logger.info(f"网关配置了 {len(device_configs)} 个子设备")
             
             # 建立连接
@@ -604,6 +608,9 @@ class GatewayManager:
             new_gateway_client.subdevice_configs = latest_device_configs
             new_gateway_client.discovery = self.discovery
             
+            # ✅ 重连时也要设置重启回调函数
+            new_gateway_client.restart_callback = self._restart_program
+            
             logger.info(f"重连后网关配置了 {len(latest_device_configs)} 个子设备")
             for device_config in latest_device_configs:
                 device_id = device_config["device_id"]
@@ -624,6 +631,61 @@ class GatewayManager:
         except Exception as e:
             logger.error(f"重新初始化网关连接异常: {e}", exc_info=True)
             return False
+
+    def _restart_program(self):
+        """程序自动重启机制（当MQTT重连失败次数过多时触发）"""
+        try:
+            import os
+            import subprocess
+            
+            logger.critical("🔄 触发程序自动重启")
+            logger.info("正在保存当前状态并准备重启...")
+            
+            # 1. 优雅关闭当前服务
+            self.running = False
+            
+            # 关闭所有IoT客户端连接
+            with self.lock:
+                for device_id, client in self.iot_clients.items():
+                    try:
+                        client.disconnect()
+                        logger.info(f"重启前关闭设备{device_id}IoT连接")
+                    except Exception as e:
+                        logger.warning(f"重启前关闭设备{device_id}连接失败: {str(e)}")
+            
+            # 2. 等待短暂时间让资源释放
+            time.sleep(2)
+            
+            # 3. 执行重启
+            logger.critical("💥 程序即将重启（3秒后生效）")
+            
+            # 检查运行环境
+            current_file = os.path.abspath(__file__)
+            
+            def delayed_restart():
+                time.sleep(3)  # 给日志输出时间
+                try:
+                    # 方式1: 使用 Python 重新执行当前脚本
+                    logger.info(f"重启命令: python3 {current_file}")
+                    os.execv(sys.executable, [sys.executable] + [current_file])
+                except Exception as e:
+                    logger.error(f"Python重启失败: {e}")
+                    try:
+                        # 方式2: 使用系统调用重启
+                        subprocess.Popen([sys.executable, current_file])
+                        os._exit(0)  # 强制退出当前进程
+                    except Exception as e2:
+                        logger.error(f"系统重启也失败: {e2}")
+                        logger.critical("自动重启失败，请手动重启程序")
+                        os._exit(1)
+            
+            # 在后台线程中执行重启，避免阻塞当前线程
+            restart_thread = threading.Thread(target=delayed_restart, daemon=True)
+            restart_thread.start()
+            
+        except Exception as e:
+            logger.error(f"程序重启异常: {e}", exc_info=True)
+            logger.critical("自动重启失败，请手动重启程序")
 
     def _get_config_hash(self, config):
         """计算配置的哈希值用于变更检测"""
