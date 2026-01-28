@@ -190,6 +190,20 @@ class NeteaseIoTClient:
                 
                 self.logger.info(f"📝 解析子设备信息: ProductKey={subdevice_product_key}, DeviceName={subdevice_device_name}")
                 
+                # 调试：打印子设备配置信息
+                self.logger.info(f"🔍 调试子设备配置:")
+                self.logger.info(f"  hasattr(self, 'subdevice_configs'): {hasattr(self, 'subdevice_configs')}")
+                if hasattr(self, 'subdevice_configs'):
+                    self.logger.info(f"  self.subdevice_configs类型: {type(self.subdevice_configs)}")
+                    self.logger.info(f"  self.subdevice_configs长度: {len(self.subdevice_configs) if self.subdevice_configs else 0}")
+                    if self.subdevice_configs:
+                        self.logger.info(f"  配置的子设备:")
+                        for i, device_config in enumerate(self.subdevice_configs):
+                            pk = device_config.get("product_key", "未知")
+                            dn = device_config.get("device_name", "未知") 
+                            device_id = device_config.get("device_id", "未知")
+                            self.logger.info(f"    [{i}] {device_id}: {pk}/{dn}")
+                
                 # 查找对应的子设备配置
                 target_device_config = None
                 if hasattr(self, 'subdevice_configs') and self.subdevice_configs:
@@ -218,15 +232,28 @@ class NeteaseIoTClient:
                     
                     # 发送回复到对应的子设备回复主题
                     reply_topic = f"sys/{subdevice_product_key}/{subdevice_device_name}/service/CommonService_reply"
-                    self._publish(reply, reply_topic)
+                    self.logger.info(f"🚀 准备发送回复到: {reply_topic}")
+                    self.logger.info(f"📤 回复内容: {reply}")
+                    success_reply = self._publish(reply, reply_topic)
+                    if success_reply:
+                        self.logger.info(f"✅ 服务回复发送成功")
+                    else:
+                        self.logger.error(f"❌ 服务回复发送失败")
                     
                 else:
                     self.logger.warning(f"⚠️ 未找到对应的子设备配置: {subdevice_product_key}/{subdevice_device_name}")
+                    self.logger.warning(f"⚠️ 需要匹配的设备: {subdevice_product_key}/{subdevice_device_name}")
                     
                     # 发送失败回复
                     error_reply = {"id": cmd_id, "code": RESPONSE_CODE["param_error"], "data": {}}
                     reply_topic = f"sys/{subdevice_product_key}/{subdevice_device_name}/service/CommonService_reply"
-                    self._publish(error_reply, reply_topic)
+                    self.logger.info(f"🚀 准备发送错误回复到: {reply_topic}")
+                    self.logger.info(f"📤 错误回复内容: {error_reply}")
+                    success_reply = self._publish(error_reply, reply_topic)
+                    if success_reply:
+                        self.logger.info(f"✅ 错误回复发送成功")
+                    else:
+                        self.logger.error(f"❌ 错误回复发送失败")
             else:
                 self.logger.warning(f"⚠️ 无法解析控制指令Topic: {topic}")
                 
@@ -244,7 +271,12 @@ class NeteaseIoTClient:
                     parts = topic.split("/")
                     if len(parts) >= 3:
                         error_topic = f"sys/{parts[1]}/{parts[2]}/service/CommonService_reply"
-                        self._publish(error_reply, error_topic)
+                        self.logger.info(f"🚀 准备发送异常错误回复到: {error_topic}")
+                        success_reply = self._publish(error_reply, error_topic)
+                        if success_reply:
+                            self.logger.info(f"✅ 异常错误回复发送成功")
+                        else:
+                            self.logger.error(f"❌ 异常错误回复发送失败")
             except:
                 pass
 
