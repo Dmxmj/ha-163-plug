@@ -176,7 +176,7 @@ class NeteaseIoTClient:
         try:
             topic = msg.topic
             payload = json.loads(msg.payload.decode("utf-8"))
-            self.logger.info(f"🔔 收到控制指令: Topic={topic}, Payload={payload}")
+            self.logger.info(f"收到控制指令: {topic} -> {payload}")
             
             cmd_id = payload.get("id")
             params = payload.get("params", {})
@@ -187,22 +187,6 @@ class NeteaseIoTClient:
             if len(topic_parts) >= 5 and topic_parts[0] == "sys":
                 subdevice_product_key = topic_parts[1]
                 subdevice_device_name = topic_parts[2]
-                
-                self.logger.info(f"📝 解析子设备信息: ProductKey={subdevice_product_key}, DeviceName={subdevice_device_name}")
-                
-                # 调试：打印子设备配置信息
-                self.logger.info(f"🔍 调试子设备配置:")
-                self.logger.info(f"  hasattr(self, 'subdevice_configs'): {hasattr(self, 'subdevice_configs')}")
-                if hasattr(self, 'subdevice_configs'):
-                    self.logger.info(f"  self.subdevice_configs类型: {type(self.subdevice_configs)}")
-                    self.logger.info(f"  self.subdevice_configs长度: {len(self.subdevice_configs) if self.subdevice_configs else 0}")
-                    if self.subdevice_configs:
-                        self.logger.info(f"  配置的子设备:")
-                        for i, device_config in enumerate(self.subdevice_configs):
-                            pk = device_config.get("product_key", "未知")
-                            dn = device_config.get("device_name", "未知") 
-                            device_id = device_config.get("device_id", "未知")
-                            self.logger.info(f"    [{i}] {device_id}: {pk}/{dn}")
                 
                 # 查找对应的子设备配置
                 target_device_config = None
@@ -217,45 +201,30 @@ class NeteaseIoTClient:
                     device_id = target_device_config.get("device_id", "未知设备")
                     entity_prefix = target_device_config.get("entity_prefix", "未知前缀")
                     
-                    self.logger.info(f"✅ 找到目标子设备: {device_id} (前缀: {entity_prefix})")
-                    
                     # 同步控制指令到HA
                     success = self._sync_to_ha_with_prefix(params, entity_prefix)
                     
                     # 构造回复消息
                     if success:
                         reply = {"id": cmd_id, "code": RESPONSE_CODE["success"], "data": params}
-                        self.logger.info(f"✅ 子设备{device_id}控制指令执行成功")
+                        self.logger.info(f"设备{device_id}控制指令执行成功")
                     else:
                         reply = {"id": cmd_id, "code": RESPONSE_CODE["failed"], "data": {}}
-                        self.logger.error(f"❌ 子设备{device_id}控制指令执行失败")
+                        self.logger.error(f"设备{device_id}控制指令执行失败")
                     
                     # 发送回复到对应的子设备回复主题
                     reply_topic = f"sys/{subdevice_product_key}/{subdevice_device_name}/service/CommonService_reply"
-                    self.logger.info(f"🚀 准备发送回复到: {reply_topic}")
-                    self.logger.info(f"📤 回复内容: {reply}")
                     success_reply = self._publish(reply, reply_topic)
-                    if success_reply:
-                        self.logger.info(f"✅ 服务回复发送成功")
-                    else:
-                        self.logger.error(f"❌ 服务回复发送失败")
                     
                 else:
-                    self.logger.warning(f"⚠️ 未找到对应的子设备配置: {subdevice_product_key}/{subdevice_device_name}")
-                    self.logger.warning(f"⚠️ 需要匹配的设备: {subdevice_product_key}/{subdevice_device_name}")
+                    self.logger.warning(f"未找到设备配置: {subdevice_product_key}/{subdevice_device_name}")
                     
                     # 发送失败回复
                     error_reply = {"id": cmd_id, "code": RESPONSE_CODE["param_error"], "data": {}}
                     reply_topic = f"sys/{subdevice_product_key}/{subdevice_device_name}/service/CommonService_reply"
-                    self.logger.info(f"🚀 准备发送错误回复到: {reply_topic}")
-                    self.logger.info(f"📤 错误回复内容: {error_reply}")
-                    success_reply = self._publish(error_reply, reply_topic)
-                    if success_reply:
-                        self.logger.info(f"✅ 错误回复发送成功")
-                    else:
-                        self.logger.error(f"❌ 错误回复发送失败")
+                    self._publish(error_reply, reply_topic)
             else:
-                self.logger.warning(f"⚠️ 无法解析控制指令Topic: {topic}")
+                self.logger.warning(f"无法解析控制指令Topic: {topic}")
                 
         except Exception as e:
             self.logger.error(f"处理控制指令失败: {str(e)}")
@@ -271,12 +240,7 @@ class NeteaseIoTClient:
                     parts = topic.split("/")
                     if len(parts) >= 3:
                         error_topic = f"sys/{parts[1]}/{parts[2]}/service/CommonService_reply"
-                        self.logger.info(f"🚀 准备发送异常错误回复到: {error_topic}")
-                        success_reply = self._publish(error_reply, error_topic)
-                        if success_reply:
-                            self.logger.info(f"✅ 异常错误回复发送成功")
-                        else:
-                            self.logger.error(f"❌ 异常错误回复发送失败")
+                        self._publish(error_reply, error_topic)
             except:
                 pass
 
@@ -343,57 +307,45 @@ class NeteaseIoTClient:
     def _publish(self, data: Dict, topic: str) -> bool:
         """安全发布消息"""
         if not self.connected or not self.enabled:
-            self.logger.warning(f"MQTT连接不可用或设备已禁用，跳过发布到{topic}")
+            self.logger.warning(f"MQTT连接不可用或设备已禁用，跳过发布")
             return False
         
         try:
             payload = json.dumps(data, ensure_ascii=False)
-            self.logger.info(f"🚀 准备发布消息到{topic}: {payload}")
+            self.logger.info(f"发送数据到{topic}: {payload}")
             
             # 检查MQTT客户端状态
             if not self.client:
-                self.logger.error("❌ MQTT客户端未初始化")
+                self.logger.error("MQTT客户端未初始化")
                 return False
             
             # 发布消息
             result = self.client.publish(topic, payload, qos=1)
-            self.logger.info(f"📡 MQTT发布结果: mid={result.mid}, rc={result.rc}")
             
             # 等待发布确认
             try:
-                result.wait_for_publish(timeout=10)  # 添加10秒超时
-                self.logger.info(f"✅ 消息发布确认成功: mid={result.mid}")
+                result.wait_for_publish(timeout=10)
             except Exception as wait_e:
-                self.logger.error(f"⏰ 等待发布确认超时或失败: {wait_e}")
+                self.logger.error(f"发布超时: {wait_e}")
                 return False
             
             if result.rc != mqtt.MQTT_ERR_SUCCESS:
                 # 详细的错误码说明
                 error_meanings = {
-                    1: "MQTT_ERR_NOMEM - 内存不足",
-                    2: "MQTT_ERR_PROTOCOL - 协议错误", 
-                    3: "MQTT_ERR_INVAL - 输入参数无效",
-                    4: "MQTT_ERR_NO_CONN - 客户端未连接",
-                    5: "MQTT_ERR_CONN_REFUSED - 连接被拒绝",
-                    6: "MQTT_ERR_NOT_FOUND - 消息未找到",
-                    7: "MQTT_ERR_CONN_LOST - 连接丢失",
-                    8: "MQTT_ERR_TLS - TLS错误",
-                    9: "MQTT_ERR_PAYLOAD_SIZE - 负载过大",
-                    10: "MQTT_ERR_NOT_SUPPORTED - 不支持",
-                    11: "MQTT_ERR_AUTH - 认证错误",
-                    12: "MQTT_ERR_ACL_DENIED - ACL拒绝",
-                    13: "MQTT_ERR_UNKNOWN - 未知错误",
-                    14: "MQTT_ERR_ERRNO - 系统错误",
-                    15: "MQTT_ERR_QUEUE_SIZE - 队列大小错误"
+                    1: "内存不足", 2: "协议错误", 3: "输入参数无效",
+                    4: "客户端未连接", 5: "连接被拒绝", 6: "消息未找到",
+                    7: "连接丢失", 8: "TLS错误", 9: "负载过大",
+                    10: "不支持", 11: "认证错误", 12: "ACL拒绝",
+                    13: "未知错误", 14: "系统错误", 15: "队列大小错误"
                 }
                 error_msg = error_meanings.get(result.rc, f"未知错误码: {result.rc}")
-                self.logger.error(f"❌ 发布失败: {error_msg}")
+                self.logger.error(f"发布失败: {error_msg}")
                 return False
             else:
-                self.logger.info(f"✅ 发布成功到{topic}")
+                self.logger.info(f"发布成功")
                 return True
         except Exception as e:
-            self.logger.error(f"❌ 发布异常: {str(e)}", exc_info=True)
+            self.logger.error(f"发布异常: {str(e)}")
             return False
 
     def _sync_to_ha(self, params: Dict):
