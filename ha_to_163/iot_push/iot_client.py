@@ -348,17 +348,52 @@ class NeteaseIoTClient:
         
         try:
             payload = json.dumps(data, ensure_ascii=False)
-            self.logger.debug(f"推送到{topic}: {payload}")
+            self.logger.info(f"🚀 准备发布消息到{topic}: {payload}")
+            
+            # 检查MQTT客户端状态
+            if not self.client:
+                self.logger.error("❌ MQTT客户端未初始化")
+                return False
+            
+            # 发布消息
             result = self.client.publish(topic, payload, qos=1)
-            result.wait_for_publish()
+            self.logger.info(f"📡 MQTT发布结果: mid={result.mid}, rc={result.rc}")
+            
+            # 等待发布确认
+            try:
+                result.wait_for_publish(timeout=10)  # 添加10秒超时
+                self.logger.info(f"✅ 消息发布确认成功: mid={result.mid}")
+            except Exception as wait_e:
+                self.logger.error(f"⏰ 等待发布确认超时或失败: {wait_e}")
+                return False
+            
             if result.rc != mqtt.MQTT_ERR_SUCCESS:
-                self.logger.error(f"发布失败，错误码{result.rc}")
+                # 详细的错误码说明
+                error_meanings = {
+                    1: "MQTT_ERR_NOMEM - 内存不足",
+                    2: "MQTT_ERR_PROTOCOL - 协议错误", 
+                    3: "MQTT_ERR_INVAL - 输入参数无效",
+                    4: "MQTT_ERR_NO_CONN - 客户端未连接",
+                    5: "MQTT_ERR_CONN_REFUSED - 连接被拒绝",
+                    6: "MQTT_ERR_NOT_FOUND - 消息未找到",
+                    7: "MQTT_ERR_CONN_LOST - 连接丢失",
+                    8: "MQTT_ERR_TLS - TLS错误",
+                    9: "MQTT_ERR_PAYLOAD_SIZE - 负载过大",
+                    10: "MQTT_ERR_NOT_SUPPORTED - 不支持",
+                    11: "MQTT_ERR_AUTH - 认证错误",
+                    12: "MQTT_ERR_ACL_DENIED - ACL拒绝",
+                    13: "MQTT_ERR_UNKNOWN - 未知错误",
+                    14: "MQTT_ERR_ERRNO - 系统错误",
+                    15: "MQTT_ERR_QUEUE_SIZE - 队列大小错误"
+                }
+                error_msg = error_meanings.get(result.rc, f"未知错误码: {result.rc}")
+                self.logger.error(f"❌ 发布失败: {error_msg}")
                 return False
             else:
-                self.logger.debug(f"发布成功到{topic}")
+                self.logger.info(f"✅ 发布成功到{topic}")
                 return True
         except Exception as e:
-            self.logger.error(f"发布异常: {str(e)}")
+            self.logger.error(f"❌ 发布异常: {str(e)}", exc_info=True)
             return False
 
     def _sync_to_ha(self, params: Dict):
