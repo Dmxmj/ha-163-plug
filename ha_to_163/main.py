@@ -353,7 +353,7 @@ class GatewayManager:
                     logger.warning(f"推送循环连续失败 {max_consecutive_errors} 次，尝试重新初始化网关连接")
                     try:
                         with self.lock:
-                            self._init_iot_clients()  # 重新初始化网关连接
+                            self._reinit_gateway_connection()  # 使用专门的重连方法
                         consecutive_errors = 0  # 重置错误计数
                         logger.info("网关连接重新初始化完成")
                     except Exception as init_e:
@@ -388,7 +388,7 @@ class GatewayManager:
                     gateway_client = self.iot_clients.get("gateway")
                     if not gateway_client or not gateway_client.connected:
                         logger.warning("检测到网关IoT连接异常，尝试恢复...")
-                        self._init_iot_clients()  # 重新初始化网关连接
+                        self._reinit_gateway_connection()  # 使用专门的重连方法
                 
                 # 5. 全量重新发现（兜底，确保配置更新生效）
                 if int(time.time()) % 3600 == 0:  # 每小时全量发现一次
@@ -553,6 +553,77 @@ class GatewayManager:
     # def _delayed_state_monitor_init(self):
     # def _on_state_change(self, entity_id, old_value, new_value):
     # def _initialize_state_monitor(self):
+
+    def _reinit_gateway_connection(self):
+        """重新初始化网关连接（专门用于重连后恢复所有配置）"""
+        try:
+            logger.info("=== 开始重新初始化网关连接 ===")
+            
+            # 1. 先关闭现有连接（如果存在）
+            old_gateway_client = self.iot_clients.get("gateway")
+            if old_gateway_client:
+                try:
+                    old_gateway_client.disconnect()
+                    logger.info("旧网关连接已断开")
+                except Exception as e:
+                    logger.warning(f"关闭旧网关连接时出错: {e}")
+            
+            # 2. 重新加载最新配置（确保获取最新的设备配置）
+            latest_config = self.config_manager.load_from_env()
+            if latest_config:
+                self.config = latest_config
+                logger.info("已重新加载最新配置")
+            
+            # 3. 使用最新配置重新创建网关客户端
+            gateway_config = self.config["gateway_triple"]
+            mqtt_config = self.config["mqtt_config"]
+            
+            if not gateway_config.get("product_key") or not gateway_config.get("device_name") or not gateway_config.get("device_secret"):
+                logger.error("网关三元组配置不完整，无法重新建立IoT连接")
+                return False
+            
+            # 创建新的网关IoT客户端
+            gateway_config_with_id = gateway_config.copy()
+            gateway_config_with_id["device_id"] = "gateway"
+            gateway_config_with_id["entity_prefix"] = "gateway"
+            gateway_config_with_id["enabled"] = True
+            
+            new_gateway_client = NeteaseIoTClient(gateway_config_with_id, mqtt_config)
+            
+            # 设置HA配置
+            new_gateway_client.set_ha_config({
+                "ha_url": self.config["ha_url"],
+                "ha_headers": {
+                    "Authorization": f"Bearer {self.config['ha_token']}",
+                    "Content-Type": "application/json"
+                }
+            })
+            
+            # 4. 获取并设置最新的子设备配置
+            latest_device_configs = self.config_manager.get_all_enabled_devices()
+            new_gateway_client.subdevice_configs = latest_device_configs
+            new_gateway_client.discovery = self.discovery
+            
+            logger.info(f"重连后网关配置了 {len(latest_device_configs)} 个子设备")
+            for device_config in latest_device_configs:
+                device_id = device_config["device_id"]
+                device_name = device_config.get("device_name", "未知")
+                product_key = device_config.get("product_key", "未知")
+                logger.info(f"  - 子设备: {device_id} ({product_key}/{device_name})")
+            
+            # 5. 建立新连接
+            logger.info("正在重新连接到网易IoT平台...")
+            if new_gateway_client.connect():
+                self.iot_clients["gateway"] = new_gateway_client
+                logger.info("✅ 网关IoT重连成功")
+                return True
+            else:
+                logger.error("❌ 网关IoT重连失败")
+                return False
+                
+        except Exception as e:
+            logger.error(f"重新初始化网关连接异常: {e}", exc_info=True)
+            return False
 
     def _get_config_hash(self, config):
         """计算配置的哈希值用于变更检测"""
