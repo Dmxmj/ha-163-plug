@@ -4,6 +4,7 @@ import time
 import threading
 import signal
 import sys
+import os
 from config_manager import ConfigManager
 from device_discovery.ha_discovery import HADiscovery
 from iot_push.iot_client import NeteaseIoTClient
@@ -699,12 +700,29 @@ class GatewayManager:
 
 # 入口函数
 if __name__ == "__main__":
-    # 创建网关实例
-    gateway = GatewayManager()
-    
-    # 初始化并启动
-    if gateway.initialize():
-        gateway.start()
-    else:
-        logger.critical("网关初始化失败，程序退出")
+    try:
+        logger.info("🚀 === HA-163-PLUG 网关程序启动 ===")
+        logger.info(f"Python版本: {sys.version}")
+        logger.info(f"工作目录: {os.getcwd()}")
+        
+        # 创建网关实例
+        logger.info("正在创建网关管理器实例...")
+        gateway = GatewayManager()
+        logger.info("✅ 网关管理器创建成功")
+        
+        # 初始化并启动
+        logger.info("开始网关初始化...")
+        if gateway.initialize():
+            logger.info("✅ 网关初始化成功，开始启动服务...")
+            gateway.start()
+        else:
+            logger.critical("❌ 网关初始化失败，程序退出")
+            sys.exit(1)
+            
+    except KeyboardInterrupt:
+        logger.info("接收到中断信号，程序退出")
+        sys.exit(0)
+    except Exception as e:
+        logger.critical(f"❌ 程序启动失败: {e}", exc_info=True)
+        logger.critical("错误详情已记录，请检查日志")
         sys.exit(1)
