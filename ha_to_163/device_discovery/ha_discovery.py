@@ -100,7 +100,8 @@ class HADiscovery(BaseDiscovery):
             if entity_id.startswith("switch."):
                 return 1 if state == "on" else 0
             elif entity_id.startswith("select."):
-                state_map = {"off": 0, "on": 1, "memory": 2}
+                # 智能插座上电状态选择器：中文选项映射
+                state_map = {"上电关闭": 0, "上电打开": 1, "断电记忆": 2}
                 return state_map.get(state, 0)
             elif entity_id.startswith("sensor."):
                 try:
