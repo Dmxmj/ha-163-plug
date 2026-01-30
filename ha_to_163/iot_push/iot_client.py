@@ -696,8 +696,13 @@ class NeteaseIoTClient:
                     # 开关类型：确保为整数 0 或 1
                     converted[iot_key] = 1 if value in [1, "1", "on", True, "True"] else 0
                 elif iot_key == "default":
-                    # 默认状态：0关闭,1开启,2记忆
-                    converted[iot_key] = int(value) if isinstance(value, (int, float)) else 0
+                    # 默认状态选择器：反向映射（HA中文选项 → 网易云数值）
+                    reverse_state_map = {"上电关闭": 0, "上电打开": 1, "断电记忆": 2}
+                    if isinstance(value, str):
+                        converted[iot_key] = reverse_state_map.get(value, 0)
+                    else:
+                        # 如果是数字，直接使用
+                        converted[iot_key] = int(value) if isinstance(value, (int, float)) else 0
                 elif iot_key in ["active_power", "current", "voltage", "energy"]:
                     # 传感器数值：确保为浮点数
                     try:
@@ -838,7 +843,8 @@ class NeteaseIoTClient:
                         if ha_key in ["all_switch", "jack_1", "jack_2", "jack_3", "jack_4", "jack_5", "jack_6"]:
                             current_states[ha_key] = 1 if state_value == "on" else 0
                         elif ha_key == "default_power_on_state":
-                            state_map = {"off": 0, "on": 1, "memory": 2}
+                            # 智能插座上电状态：中文选项映射
+                            state_map = {"上电关闭": 0, "上电打开": 1, "断电记忆": 2}
                             current_states[ha_key] = state_map.get(state_value, 0)
                         else:
                             # 数值类型传感器
