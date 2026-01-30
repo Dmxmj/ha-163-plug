@@ -404,9 +404,9 @@ class NeteaseIoTClient:
                         service = "switch.turn_on" if value == 1 else "switch.turn_off"
                         service_data = {"entity_id": entity_id}
                     elif param == "default":
-                        # 默认状态选择器
-                        state_map = {0: "off", 1: "on", 2: "memory"}
-                        ha_state = state_map.get(value, "off")
+                        # 默认状态选择器 (智能插座上电状态)
+                        state_map = {0: "上电关闭", 1: "上电打开", 2: "断电记忆"}
+                        ha_state = state_map.get(value, "上电关闭")
                         service = "select.select_option"
                         service_data = {"entity_id": entity_id, "option": ha_state}
                     else:
