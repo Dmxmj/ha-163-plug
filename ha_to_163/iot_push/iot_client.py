@@ -479,8 +479,8 @@ class NeteaseIoTClient:
                         )
                         
                         if states_resp.status_code in [200, 201]:
-                            self.logger.info(f"✅ 通过states API设置成功: {entity_id} → {ha_state}")
-                            success_count += 1
+                            self.logger.warning(f"⚠️ 通过states API更新显示状态: {entity_id} → {ha_state} (设备可能未实际响应)")
+                            # 注意：states API只更新显示状态，不算控制成功
                         else:
                             self.logger.error(f"❌ states API也失败: {entity_id}, 状态码: {states_resp.status_code}")
                         
