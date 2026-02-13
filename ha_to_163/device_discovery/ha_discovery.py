@@ -7,9 +7,9 @@ from .base_discovery import BaseDiscovery
 
 # 属性映射（使用IoT原生参数名，避免双重转换）
 PROPERTY_MAPPING = {
-    # 标准开关插座属性映射（直接映射到IoT参数名）
+    # 标准开关插座属性映射（精确匹配）
     "child_lock_p_14_9": "child_lock",
-    "switch_status_p_10_1": "switch_status", 
+    "switch_status_p_10_1": "switch_status",
     "toggle_a_2_1": "toggle",
     "on_p_2_1": "state0",      # 总开关 → state0
     "on_p_7_1": "state1",      # 插口1 → state1
@@ -22,12 +22,14 @@ PROPERTY_MAPPING = {
     "power_consumption_accumulation_way_p_3_3": "power_consumption_accumulation_way",
     "indicator_light_p_2_4": "indicator_light",
 }
-# 前缀匹配（传感器类，只匹配前缀部分）
-PREFIX_MAPPING = {
-    "electric_power_": "active_power",    # 匹配 electric_power_p_2_6, electric_power_p_3_2 等
-    "electric_current_": "current",       # 匹配 electric_current_p_2_7, electric_current_p_3_4 等
-    "voltage_": "voltage",                # 匹配 voltage_p_2_8, voltage_p_3_5 等
-    "power_consumption_": "energy",       # 匹配 power_consumption_p_2_9, power_consumption_p_3_1 等
+
+# 关键字段匹配（只匹配前缀，忽略后面的参数编号）
+KEYWORD_MAPPING = {
+    "electric_power": "active_power",        # 匹配所有 electric_power_*
+    "electric_current": "current",           # 匹配所有 electric_current_*
+    "voltage": "voltage",                    # 匹配所有 voltage_*
+    "power_consumption": "energy",           # 匹配所有 power_consumption_*
+    "default_power_on_state": "default",     # 匹配所有 default_power_on_state_*
 }
 
 class HADiscovery(BaseDiscovery):
@@ -138,25 +140,25 @@ class HADiscovery(BaseDiscovery):
                 if not feature:
                     continue
 
-                # 匹配属性 - 修复：同时检查精确匹配和前缀匹配
+                # 匹配属性 - 修复：简化的关键字匹配策略
                 property_name = None
-                
+
                 # 1. 首先检查精确匹配（PROPERTY_MAPPING）
                 if feature in PROPERTY_MAPPING:
                     property_name = PROPERTY_MAPPING[feature]
                 else:
-                    # 2. 检查属性映射中的部分匹配
-                    for key in PROPERTY_MAPPING:
-                        if key in feature:
-                            property_name = PROPERTY_MAPPING[key]
-                            break
-                
-                # 3. 如果仍未匹配，检查前缀匹配（PREFIX_MAPPING）
-                if not property_name:
-                    for feature_prefix, mapped_name in PREFIX_MAPPING.items():
-                        if feature.startswith(feature_prefix):
+                    # 2. 检查关键字匹配（KEYWORD_MAPPING）- 匹配关键字段，忽略后缀
+                    for keyword, mapped_name in KEYWORD_MAPPING.items():
+                        if feature.startswith(keyword):
                             property_name = mapped_name
                             break
+
+                    # 3. 如果仍未匹配，检查部分匹配
+                    if not property_name:
+                        for key in PROPERTY_MAPPING:
+                            if key in feature:
+                                property_name = PROPERTY_MAPPING[key]
+                                break
 
                 # 验证并保存
                 if property_name and property_name in supported_props:
@@ -167,7 +169,7 @@ class HADiscovery(BaseDiscovery):
                 self.logger.info(f"设备{device_id}发现成功，匹配到{len(sensor_map)}个实体")
                 for prop_name, entity_id in sensor_map.items():
                     self.logger.info(f"  - {prop_name}: {entity_id}")
-                    
+
                 # 保存为统一的数据结构
                 device_result = {
                     "device_id": device_id,
