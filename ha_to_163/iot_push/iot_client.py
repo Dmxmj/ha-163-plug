@@ -461,28 +461,9 @@ class NeteaseIoTClient:
                         self.logger.error(f"❌ 控制指令执行失败: {entity_id}, 状态码: {service_resp.status_code}")
                         self.logger.error(f"响应内容: {service_resp.text}")
                         
-                        # 尝试通过states API直接设置（作为备用方案）
-                        self.logger.info(f"🔄 尝试通过states API设置: {entity_id}")
-                        
-                        # 处理HA Add-on环境中的states API URL构建
-                        if ha_api_url.endswith("/api/") or ha_api_url.endswith("/api"):
-                            states_url = f"{ha_api_url.rstrip('/')}/states/{entity_id}"
-                        else:
-                            states_url = f"{ha_api_url}api/states/{entity_id}"
-                        
-                        states_resp = requests.post(
-                            states_url,
-                            headers=ha_headers,
-                            json={"state": ha_state},
-                            timeout=10,
-                            verify=False
-                        )
-                        
-                        if states_resp.status_code in [200, 201]:
-                            self.logger.warning(f"⚠️ 通过states API更新显示状态: {entity_id} → {ha_state} (设备可能未实际响应)")
-                            # 注意：states API只更新显示状态，不算控制成功
-                        else:
-                            self.logger.error(f"❌ states API也失败: {entity_id}, 状态码: {states_resp.status_code}")
+                        # ⚠️ 控制失败时不应该尝试states API，因为那只是改变显示状态，不会控制实际设备
+                        # 直接记录为失败，让IoT平台知道控制未成功
+                        self.logger.warning(f"❌ 设备控制失败，不使用states API备用方案（避免状态不一致）")
                         
                 except Exception as e:
                     self.logger.error(f"处理参数{param}时出错: {e}")
