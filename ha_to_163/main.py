@@ -30,7 +30,7 @@ class GatewayManager:
         self.config = {}
         self.discovery = None
         self.iot_clients = {}  # {device_id: NeteaseIoTClient}
-        
+
         # 运行状态控制
         self.running = False
         self.push_thread = None
@@ -38,12 +38,12 @@ class GatewayManager:
         self.dynamic_discovery_thread = None  # 动态发现线程
         # self.state_monitor = None  # 状态变化监听器 - 已移除
         self.lock = threading.Lock()  # 线程安全锁
-        
+
         # 动态设备发现状态
         self.last_config_check = 0
         self.last_config_hash = None
         self.active_device_configs = {}  # 当前活跃的设备配置缓存
-        
+
         # 注册信号处理（优雅退出）
         signal.signal(signal.SIGTERM, self._graceful_exit)
         signal.signal(signal.SIGINT, self._graceful_exit)
@@ -54,13 +54,13 @@ class GatewayManager:
         if not self._sync_ntp():
             logger.critical("NTP校时失败，程序无法启动")
             return False
-        
+
         # 2. 加载配置（优先从HA Add-on读取，降级到本地缓存）
         self.config = self.config_manager.load_from_env()
         if not self.config:
             logger.critical("配置加载失败，程序无法启动")
             return False
-        
+
         # 3. 初始化HA实体发现模块
         ha_headers = {
             "Authorization": f"Bearer {self.config['ha_token']}",
@@ -71,21 +71,21 @@ class GatewayManager:
         logger.info(f"  ha_url: {self.config.get('ha_url')}")
         logger.info(f"  ha_token: {self.config.get('ha_token', '')[:20]}...")
         logger.info(f"  ha_headers: {ha_headers}")
-        
+
         self.discovery = HADiscovery(self.config, ha_headers)
-        
+
         # 4. 初始化所有启用设备的IoT客户端
         self._init_iot_clients()
-        
+
         # 5. 初始设备发现
         self._initial_device_discovery()
-        
+
         # 6. 初始化动态发现状态
         self._initialize_dynamic_discovery()
-        
+
         # 7. 标记运行状态（先标记运行状态）
         self.running = True
-        
+
         # 8. 移除状态变化监听器（已禁用实时监听功能）
         # delay_thread = threading.Thread(
         #     target=self._delayed_state_monitor_init,
@@ -101,7 +101,7 @@ class GatewayManager:
         if not self.running:
             logger.error("网关未完成初始化，启动失败")
             return
-        
+
         # 启动数据推送线程（60秒/次）
         self.push_thread = threading.Thread(
             target=self._push_data_loop,
@@ -109,7 +109,7 @@ class GatewayManager:
             daemon=True
         )
         self.push_thread.start()
-        
+
         # 启动设备发现重试线程（300秒/次）
         self.discovery_thread = threading.Thread(
             target=self._discovery_retry_loop,
@@ -117,7 +117,7 @@ class GatewayManager:
             daemon=True
         )
         self.discovery_thread.start()
-        
+
         # 启动动态设备发现线程（60秒/次）
         self.dynamic_discovery_thread = threading.Thread(
             target=self._dynamic_device_discovery_loop,
@@ -125,9 +125,9 @@ class GatewayManager:
             daemon=True
         )
         self.dynamic_discovery_thread.start()
-        
+
         logger.info("=== 网关已启动（推送间隔60秒，发现重试间隔300秒，动态发现间隔60秒）===")
-        
+
         # 主线程阻塞（保持程序运行）
         try:
             while self.running:
@@ -156,24 +156,24 @@ class GatewayManager:
             # 使用网关三元组创建单一MQTT连接
             gateway_config = self.config["gateway_triple"]
             mqtt_config = self.config["mqtt_config"]
-            
+
             if not gateway_config.get("product_key") or not gateway_config.get("device_name") or not gateway_config.get("device_secret"):
                 logger.error("网关三元组配置不完整，无法建立IoT连接")
                 return
-            
+
             logger.info("=== 初始化网关IoT连接 ===")
             logger.info(f"ProductKey: {gateway_config['product_key']}")
             logger.info(f"DeviceName: {gateway_config['device_name']}")
-            
+
             # 创建网关IoT客户端（单一连接）
             # 为网关配置添加必需的字段
             gateway_config_with_id = gateway_config.copy()
             gateway_config_with_id["device_id"] = "gateway"
             gateway_config_with_id["entity_prefix"] = "gateway"  # 添加默认entity_prefix
             gateway_config_with_id["enabled"] = True  # 网关默认启用
-            
+
             gateway_client = NeteaseIoTClient(gateway_config_with_id, mqtt_config)
-            
+
             # 设置HA配置（用于命令同步）
             gateway_client.set_ha_config({
                 "ha_url": self.config["ha_url"],
@@ -182,32 +182,32 @@ class GatewayManager:
                     "Content-Type": "application/json"
                 }
             })
-            
+
             # ✅ 关键修复：设置子设备配置信息
             device_configs = self.config_manager.get_all_enabled_devices()
             gateway_client.subdevice_configs = device_configs  # 添加子设备配置到网关客户端
-            
+
             # ✅ 新增：设置设备发现模块引用，用于获取实体映射
             gateway_client.discovery = self.discovery
-            
+
             # ✅ 新增：设置自动重启回调函数
             gateway_client.restart_callback = self._restart_program
-            
+
             logger.info(f"网关配置了 {len(device_configs)} 个子设备")
-            
+
             # 建立连接
             logger.info("正在连接到网易IoT平台...")
             if gateway_client.connect():
                 self.iot_clients["gateway"] = gateway_client
                 logger.info("✅ 网关IoT连接建立成功")
-                
+
                 logger.info(f"网关管理的子设备数量: {len(device_configs)}")
                 for device_config in device_configs:
                     device_id = device_config["device_id"]
                     device_name = device_config.get("device_name", "未知")
                     product_key = device_config.get("product_key", "未知")
                     logger.info(f"  - 子设备: {device_id} ({product_key}/{device_name})")
-                
+
             else:
                 logger.error("❌ 网关IoT连接建立失败")
 
@@ -215,17 +215,17 @@ class GatewayManager:
         """初始设备发现"""
         logger.info("=== 开始初始设备发现 ===")
         device_configs = self.config_manager.get_all_enabled_devices()
-        
+
         # 为每个设备配置添加支持的属性列表（统一使用IoT原生参数名）
         for device_config in device_configs:
             if "supported_properties" not in device_config:
                 # 默认支持的属性（米家智能插座，使用IoT原生参数名）
                 device_config["supported_properties"] = [
                     "state0", "state1", "state2", "state3", "state4", "state5", "state6",
-                    "active_power", "current", "voltage", "energy", 
+                    "active_power", "current", "voltage", "energy",
                     "default"
                 ]
-        
+
         discovered_devices = self.discovery.discover_all_devices(device_configs)
         if discovered_devices:
             logger.info(f"✅ 初始发现完成，成功发现{len(discovered_devices)}个设备")
@@ -242,31 +242,31 @@ class GatewayManager:
         logger.info("🚀 数据推送循环启动")
         consecutive_errors = 0  # 连续错误计数
         max_consecutive_errors = 5  # 最大连续错误次数
-        
+
         while self.running:
             try:
                 # 1. 检查网关连接状态
                 with self.lock:
                     gateway_client = self.iot_clients.get("gateway")
-                
+
                 if not gateway_client or not gateway_client.connected:
                     logger.warning("网关IoT连接不可用，跳过本次推送")
                     time.sleep(self.config["report_interval"])
                     continue
-                
+
                 # 2. 获取当前已发现的所有设备
                 discovered_devices = self.discovery.get_discovered_devices()
                 logger.info(f"推送循环 - 已发现设备数: {len(discovered_devices)}")
-                
+
                 # 3. 获取启用的子设备配置
                 device_configs = self.config_manager.get_all_enabled_devices()
                 device_config_map = {d["device_id"]: d for d in device_configs}
-                
+
                 # 4. 逐个子设备处理数据推送
                 if discovered_devices:
                     logger.info(f"已发现的设备列表: {list(discovered_devices.keys())}")
                     logger.info(f"配置中的设备列表: {list(device_config_map.keys())}")
-                
+
                 for device_id, device_info in discovered_devices.items():
                     try:
                         # 检查是否是配置中的子设备
@@ -274,35 +274,35 @@ class GatewayManager:
                             logger.warning(f"设备{device_id}不在子设备配置中，跳过推送")
                             logger.info(f"可用配置设备: {list(device_config_map.keys())}")
                             continue
-                        
+
                         logger.info(f"开始处理设备: {device_id}")
-                        
+
                         # 读取HA实体值（容错读取，单个实体失败不影响）
                         ha_data = {}
-                        
+
                         # === 修复数据结构不一致问题 ===
                         logger.info(f"=== 设备{device_id}数据结构调试 ===")
                         logger.info(f"device_info类型: {type(device_info)}")
                         logger.info(f"device_info内容: {device_info}")
-                        
+
                         # 检测并修复数据结构问题
                         if isinstance(device_info, dict):
                             logger.info(f"device_info包含的键: {list(device_info.keys())}")
-                            
+
                             # 情况1：正确的数据结构（包含sensors键）
                             if 'sensors' in device_info:
                                 sensors = device_info['sensors']
                                 logger.info(f"✅ 正确数据结构，sensors类型: {type(sensors)}")
                                 logger.info(f"sensors数量: {len(sensors) if isinstance(sensors, dict) else 'N/A'}")
-                            
+
                             # 情况2：数据被拍平了（device_info直接就是传感器映射）
-                            elif all(isinstance(v, str) and any(entity_type in v for entity_type in ['sensor.', 'switch.', 'select.', 'binary_sensor.', 'number.', 'text.']) 
-                                     for k, v in device_info.items() 
+                            elif all(isinstance(v, str) and any(entity_type in v for entity_type in ['sensor.', 'switch.', 'select.', 'binary_sensor.', 'number.', 'text.'])
+                                     for k, v in device_info.items()
                                      if isinstance(v, str) and k not in ['device_id', 'config', 'sensors']):
                                 logger.warning("⚠️ 检测到数据结构被拍平，正在修复...")
                                 sensors = device_info  # device_info本身就是传感器映射
                                 logger.info(f"修复后sensors数量: {len(sensors)}")
-                            
+
                             # 情况3：其他情况
                             else:
                                 logger.error("❌ 无法识别的数据结构")
@@ -310,12 +310,12 @@ class GatewayManager:
                         else:
                             logger.error(f"device_info不是字典类型: {type(device_info)}")
                             sensors = {}
-                        
+
                         logger.info(f"设备{device_id}可用传感器: {list(sensors.keys())}")
-                        
+
                         # 调试：显示完整的device_info结构
                         logger.debug(f"设备{device_id}完整信息: {device_info}")
-                        
+
                         for prop_name, entity_id in sensors.items():
                             value = self.discovery.read_entity_value_safe(entity_id)
                             if value is not None:
@@ -323,7 +323,7 @@ class GatewayManager:
                                 logger.info(f"设备{device_id} {prop_name}({entity_id}): {value}")
                             else:
                                 logger.warning(f"设备{device_id} {prop_name}({entity_id}): 读取失败或值为空")
-                        
+
                         # 推送子设备数据到网易IoT平台
                         if ha_data:
                             logger.info(f"设备{device_id}待推送数据: {ha_data}")
@@ -337,22 +337,22 @@ class GatewayManager:
                                 logger.warning(f"❌ 子设备{device_id}推送失败")
                         else:
                             logger.warning(f"设备{device_id}无有效数据可推送")
-                    
+
                     except Exception as e:
                         # 单个设备推送失败，记录日志并继续处理下一个
                         logger.error(f"子设备{device_id}推送异常（已跳过）: {str(e)}")
                         continue
-                
+
                 # 5. 推送成功，重置错误计数
                 consecutive_errors = 0
                 # 等待推送间隔（固定60秒）
                 time.sleep(self.config["report_interval"])
-            
+
             except Exception as e:
                 # 推送循环异常，记录并短暂等待后恢复
                 consecutive_errors += 1
                 logger.error(f"推送循环全局异常 ({consecutive_errors}/{max_consecutive_errors}): {str(e)}", exc_info=True)
-                
+
                 # 如果连续错误次数过多，尝试重新初始化网关连接
                 if consecutive_errors >= max_consecutive_errors:
                     logger.warning(f"推送循环连续失败 {max_consecutive_errors} 次，尝试重新初始化网关连接")
@@ -363,7 +363,7 @@ class GatewayManager:
                         logger.info("网关连接重新初始化完成")
                     except Exception as init_e:
                         logger.error(f"重新初始化网关连接失败: {str(init_e)}")
-                
+
                 # 等待更长时间后重试
                 wait_time = min(10 + consecutive_errors * 5, 60)  # 递增等待时间，最大60秒
                 logger.info(f"推送循环将在 {wait_time} 秒后重试")
@@ -376,33 +376,42 @@ class GatewayManager:
                 # 1. 获取所有启用的设备配置
                 device_configs = self.config_manager.get_all_enabled_devices()
                 retry_interval = self.config["discovery_retry_interval"]
-                
-                # 2. 重试发现失败的设备
+
+                # 2. 为每个设备配置添加支持的属性列表（修复：确保重试发现时也有supported_properties）
+                for device_config in device_configs:
+                    if "supported_properties" not in device_config:
+                        device_config["supported_properties"] = [
+                            "state0", "state1", "state2", "state3", "state4", "state5", "state6",
+                            "active_power", "current", "voltage", "energy",
+                            "default"
+                        ]
+
+                # 3. 重试发现失败的设备
                 recovered_devices = self.discovery.retry_failed_devices(
                     device_configs,
                     retry_interval
                 )
-                
-                # 3. 如果有设备恢复，记录日志（不需要创建单独的IoT客户端）
+
+                # 4. 如果有设备恢复，记录日志（不需要创建单独的IoT客户端）
                 if recovered_devices:
                     for device_id in recovered_devices.keys():
                         logger.info(f"子设备{device_id}恢复上线，将通过网关连接推送数据")
-                
-                # 4. 检查并恢复网关IoT连接
+
+                # 5. 检查并恢复网关IoT连接
                 with self.lock:
                     gateway_client = self.iot_clients.get("gateway")
                     if not gateway_client or not gateway_client.connected:
                         logger.warning("检测到网关IoT连接异常，尝试恢复...")
                         self._reinit_gateway_connection()  # 使用专门的重连方法
-                
-                # 5. 全量重新发现（兜底，确保配置更新生效）
+
+                # 6. 全量重新发现（兜底，确保配置更新生效）
                 if int(time.time()) % 3600 == 0:  # 每小时全量发现一次
                     self.discovery.discover_all_devices(device_configs)
                     logger.info("执行每小时全量设备发现，确保配置最新")
-                
-                # 6. 等待重试间隔（固定300秒）
+
+                # 7. 等待重试间隔（固定300秒）
                 time.sleep(retry_interval)
-            
+
             except Exception as e:
                 logger.error(f"发现重试循环异常: {str(e)}", exc_info=True)
                 time.sleep(60)
@@ -411,15 +420,15 @@ class GatewayManager:
         """优雅退出（关闭所有连接和线程）"""
         logger.info("=== 开始优雅退出网关 ===")
         self.running = False
-        
-        # 状态监听器已移除 
+
+        # 状态监听器已移除
         # if self.state_monitor:
         #     try:
         #         self.state_monitor.stop()
         #         logger.info("状态监听器已关闭")
         #     except Exception as e:
         #         logger.error(f"关闭状态监听器失败: {str(e)}")
-        
+
         # 关闭所有IoT客户端连接
         with self.lock:
             for device_id, client in self.iot_clients.items():
@@ -428,7 +437,7 @@ class GatewayManager:
                     logger.info(f"设备{device_id}IoT连接已关闭")
                 except Exception as e:
                     logger.error(f"关闭设备{device_id}连接失败: {str(e)}")
-        
+
         # 等待线程退出
         if self.push_thread and self.push_thread.is_alive():
             self.push_thread.join(timeout=10)
@@ -436,7 +445,7 @@ class GatewayManager:
             self.discovery_thread.join(timeout=10)
         if self.dynamic_discovery_thread and self.dynamic_discovery_thread.is_alive():
             self.dynamic_discovery_thread.join(timeout=10)
-        
+
         logger.info("=== 网关已优雅退出 ===")
         sys.exit(0)
 
@@ -454,47 +463,47 @@ class GatewayManager:
         """检查并发现新增设备（支持热插拔）"""
         import hashlib
         import json
-        
+
         try:
             # 1. 首先检查配置文件是否有变化，避免不必要的重载
             if not self.config_manager.has_config_changed(self.last_config_check):
                 # 配置文件无变化，跳过此次检查
                 logger.debug("配置文件无变化，跳过动态发现检查")
                 return
-            
+
             # 2. 重新加载配置（从文件或环境变量）
             current_config = self.config_manager.load_from_env()
             if not current_config:
                 logger.warning("动态发现：无法重新加载配置")
                 return
-            
+
             # 3. 计算当前设备配置的哈希值
             current_device_configs = current_config.get("devices_triple", [])
             current_config_json = json.dumps(current_device_configs, sort_keys=True)
             current_config_hash = hashlib.md5(current_config_json.encode()).hexdigest()
-            
+
             # 4. 检查配置是否有变化
             if self.last_config_hash and self.last_config_hash == current_config_hash:
                 # 配置无变化，跳过此次检查
                 logger.debug("设备配置哈希值无变化，跳过动态发现")
                 return
-            
+
             logger.info("=== 检测到设备配置变化，开始动态发现 ===")
-            
+
             # 5. 识别新增设备
             current_device_ids = {d["device_id"] for d in current_device_configs if d.get("enabled", False)}
             active_device_ids = set(self.active_device_configs.keys())
-            
+
             new_device_ids = current_device_ids - active_device_ids
             removed_device_ids = active_device_ids - current_device_ids
-            
+
             if new_device_ids:
                 logger.info(f"发现新增设备: {list(new_device_ids)}")
-                
+
                 # 6. 为新增设备执行实体发现
-                new_device_configs = [d for d in current_device_configs 
+                new_device_configs = [d for d in current_device_configs
                                     if d["device_id"] in new_device_ids and d.get("enabled", False)]
-                
+
                 # 为新设备配置添加默认支持的属性（使用IoT原生参数名）
                 for device_config in new_device_configs:
                     if "supported_properties" not in device_config:
@@ -503,35 +512,35 @@ class GatewayManager:
                             "active_power", "current", "voltage", "energy",
                             "default"
                         ]
-                
+
                 # 执行新设备的发现（不影响现有设备）
                 newly_discovered = self.discovery.discover_all_devices(new_device_configs)
-                
+
                 if newly_discovered:
                     logger.info(f"✅ 动态发现成功，新增{len(newly_discovered)}个设备")
                     for device_id, device_info in newly_discovered.items():
                         sensors = device_info.get("sensors", {})
                         logger.info(f"  - 新设备{device_id}: {len(sensors)}个传感器")
-                        
+
                         # 更新活跃设备配置缓存
                         device_config = next(d for d in new_device_configs if d["device_id"] == device_id)
                         self.active_device_configs[device_id] = device_config
                 else:
                     logger.warning(f"❌ 新增设备{list(new_device_ids)}发现失败")
-            
+
             if removed_device_ids:
                 logger.info(f"检测到移除设备: {list(removed_device_ids)}")
                 # 从活跃配置中移除
                 for device_id in removed_device_ids:
                     self.active_device_configs.pop(device_id, None)
                     # 注意：不需要断开IoT连接，因为使用的是网关模式单一连接
-                
+
                 # 7. 更新配置哈希值
                 self.last_config_hash = current_config_hash
                 self.last_config_check = int(time.time())
-            
+
             logger.info(f"动态发现完成，当前活跃设备数: {len(self.active_device_configs)}")
-                
+
         except Exception as e:
             logger.error(f"动态设备发现异常: {str(e)}", exc_info=True)
 
@@ -539,18 +548,18 @@ class GatewayManager:
         """初始化动态发现状态"""
         import hashlib
         import json
-        
+
         # 获取当前设备配置并建立初始哈希值
         device_configs = self.config.get("devices_triple", [])
         config_json = json.dumps(device_configs, sort_keys=True)
         self.last_config_hash = hashlib.md5(config_json.encode()).hexdigest()
-        
+
         # 建立活跃设备配置缓存
         for device_config in device_configs:
             if device_config.get("enabled", False):
                 device_id = device_config["device_id"]
                 self.active_device_configs[device_id] = device_config
-        
+
         self.last_config_check = int(time.time())
         logger.info(f"动态发现初始化完成，活跃设备数: {len(self.active_device_configs)}")
 
@@ -563,7 +572,7 @@ class GatewayManager:
         """重新初始化网关连接（专门用于重连后恢复所有配置）"""
         try:
             logger.info("=== 开始重新初始化网关连接 ===")
-            
+
             # 1. 先关闭现有连接（如果存在）
             old_gateway_client = self.iot_clients.get("gateway")
             if old_gateway_client:
@@ -572,29 +581,29 @@ class GatewayManager:
                     logger.info("旧网关连接已断开")
                 except Exception as e:
                     logger.warning(f"关闭旧网关连接时出错: {e}")
-            
+
             # 2. 重新加载最新配置（确保获取最新的设备配置）
             latest_config = self.config_manager.load_from_env()
             if latest_config:
                 self.config = latest_config
                 logger.info("已重新加载最新配置")
-            
+
             # 3. 使用最新配置重新创建网关客户端
             gateway_config = self.config["gateway_triple"]
             mqtt_config = self.config["mqtt_config"]
-            
+
             if not gateway_config.get("product_key") or not gateway_config.get("device_name") or not gateway_config.get("device_secret"):
                 logger.error("网关三元组配置不完整，无法重新建立IoT连接")
                 return False
-            
+
             # 创建新的网关IoT客户端
             gateway_config_with_id = gateway_config.copy()
             gateway_config_with_id["device_id"] = "gateway"
             gateway_config_with_id["entity_prefix"] = "gateway"
             gateway_config_with_id["enabled"] = True
-            
+
             new_gateway_client = NeteaseIoTClient(gateway_config_with_id, mqtt_config)
-            
+
             # 设置HA配置
             new_gateway_client.set_ha_config({
                 "ha_url": self.config["ha_url"],
@@ -603,22 +612,22 @@ class GatewayManager:
                     "Content-Type": "application/json"
                 }
             })
-            
+
             # 4. 获取并设置最新的子设备配置
             latest_device_configs = self.config_manager.get_all_enabled_devices()
             new_gateway_client.subdevice_configs = latest_device_configs
             new_gateway_client.discovery = self.discovery
-            
+
             # ✅ 重连时也要设置重启回调函数
             new_gateway_client.restart_callback = self._restart_program
-            
+
             logger.info(f"重连后网关配置了 {len(latest_device_configs)} 个子设备")
             for device_config in latest_device_configs:
                 device_id = device_config["device_id"]
                 device_name = device_config.get("device_name", "未知")
                 product_key = device_config.get("product_key", "未知")
                 logger.info(f"  - 子设备: {device_id} ({product_key}/{device_name})")
-            
+
             # 5. 建立新连接
             logger.info("正在重新连接到网易IoT平台...")
             if new_gateway_client.connect():
@@ -628,7 +637,7 @@ class GatewayManager:
             else:
                 logger.error("❌ 网关IoT重连失败")
                 return False
-                
+
         except Exception as e:
             logger.error(f"重新初始化网关连接异常: {e}", exc_info=True)
             return False
@@ -638,13 +647,13 @@ class GatewayManager:
         try:
             import os
             import subprocess
-            
+
             logger.critical("🔄 触发程序自动重启")
             logger.info("正在保存当前状态并准备重启...")
-            
+
             # 1. 优雅关闭当前服务
             self.running = False
-            
+
             # 关闭所有IoT客户端连接
             with self.lock:
                 for device_id, client in self.iot_clients.items():
@@ -653,16 +662,16 @@ class GatewayManager:
                         logger.info(f"重启前关闭设备{device_id}IoT连接")
                     except Exception as e:
                         logger.warning(f"重启前关闭设备{device_id}连接失败: {str(e)}")
-            
+
             # 2. 等待短暂时间让资源释放
             time.sleep(2)
-            
+
             # 3. 执行重启
             logger.critical("💥 程序即将重启（3秒后生效）")
-            
+
             # 检查运行环境
             current_file = os.path.abspath(__file__)
-            
+
             def delayed_restart():
                 time.sleep(3)  # 给日志输出时间
                 try:
@@ -679,11 +688,11 @@ class GatewayManager:
                         logger.error(f"系统重启也失败: {e2}")
                         logger.critical("自动重启失败，请手动重启程序")
                         os._exit(1)
-            
+
             # 在后台线程中执行重启，避免阻塞当前线程
             restart_thread = threading.Thread(target=delayed_restart, daemon=True)
             restart_thread.start()
-            
+
         except Exception as e:
             logger.error(f"程序重启异常: {e}", exc_info=True)
             logger.critical("自动重启失败，请手动重启程序")
