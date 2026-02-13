@@ -138,14 +138,24 @@ class HADiscovery(BaseDiscovery):
                 if not feature:
                     continue
 
-                # 匹配属性
+                # 匹配属性 - 修复：同时检查精确匹配和前缀匹配
                 property_name = None
+                
+                # 1. 首先检查精确匹配（PROPERTY_MAPPING）
                 if feature in PROPERTY_MAPPING:
                     property_name = PROPERTY_MAPPING[feature]
                 else:
+                    # 2. 检查属性映射中的部分匹配
                     for key in PROPERTY_MAPPING:
                         if key in feature:
                             property_name = PROPERTY_MAPPING[key]
+                            break
+                
+                # 3. 如果仍未匹配，检查前缀匹配（PREFIX_MAPPING）
+                if not property_name:
+                    for feature_prefix, mapped_name in PREFIX_MAPPING.items():
+                        if feature.startswith(feature_prefix):
+                            property_name = mapped_name
                             break
 
                 # 验证并保存
@@ -155,6 +165,9 @@ class HADiscovery(BaseDiscovery):
 
             if sensor_map:
                 self.logger.info(f"设备{device_id}发现成功，匹配到{len(sensor_map)}个实体")
+                for prop_name, entity_id in sensor_map.items():
+                    self.logger.info(f"  - {prop_name}: {entity_id}")
+                    
                 # 保存为统一的数据结构
                 device_result = {
                     "device_id": device_id,
