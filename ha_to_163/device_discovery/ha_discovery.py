@@ -123,7 +123,23 @@ class HADiscovery(BaseDiscovery):
 
         try:
             self.logger.info(f"开始发现设备: {device_id}（前缀: {prefix}）")
+            self.logger.info(f"  [调试] 支持的属性: {supported_props}")
             sensor_map = {}
+
+            # 调试：先统计一下匹配前缀的实体
+            prefix_matching_entities = []
+            for entity in self.entities:
+                entity_id = entity.get("entity_id", "")
+                entity_core = entity_id.split(".", 1)[1] if "." in entity_id else ""
+                if prefix in entity_core:
+                    prefix_matching_entities.append(entity_id)
+
+            if prefix_matching_entities:
+                self.logger.info(f"  [调试] 前缀 '{prefix}' 匹配到 {len(prefix_matching_entities)} 个实体:")
+                for eid in prefix_matching_entities:
+                    self.logger.info(f"    - {eid}")
+            else:
+                self.logger.warning(f"  [调试] 前缀 '{prefix}' 未匹配到任何实体!")
 
             # 遍历实体匹配当前设备
             for entity in self.entities:
@@ -135,8 +151,34 @@ class HADiscovery(BaseDiscovery):
                 if prefix not in entity_core:
                     continue
 
-                # 提取特征字段
-                feature = entity_core.replace(prefix, "").strip("_")
+                # 提取特征字段（修复：正确处理不同格式的prefix）
+                # 找到prefix在entity_core中的位置，提取后面的部分
+                prefix_pos = entity_core.find(prefix)
+                if prefix_pos == -1:
+                    continue
+
+                # 从prefix结束位置开始提取，跳过中间的设备标识符（如pw6u1）
+                after_prefix = entity_core[prefix_pos + len(prefix):]
+
+                # 移除设备标识符部分（如_pw6u1_）
+                # 特征字段应该以已知的属性关键词开头
+                feature_parts = after_prefix.strip("_").split("_")
+
+                # 找到第一个属性关键词的位置
+                feature_start_idx = 0
+                known_keywords = list(KEYWORD_MAPPING.keys()) + list(PROPERTY_MAPPING.keys())
+                for i, part in enumerate(feature_parts):
+                    # 检查从当前位置开始的组合是否匹配已知关键词
+                    for j in range(i + 1, len(feature_parts) + 1):
+                        combined = "_".join(feature_parts[i:j])
+                        if any(combined.startswith(kw) or kw.startswith(combined) for kw in known_keywords):
+                            feature_start_idx = i
+                            break
+                    else:
+                        continue
+                    break
+
+                feature = "_".join(feature_parts[feature_start_idx:])
                 if not feature:
                     continue
 
